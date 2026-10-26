@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://isacsim.local/record.v1.json",
+  "title": "ISAC-SIM record",
+  "type": "object",
+  "required": ["schema", "run_id", "stream", "ts_ns", "t_wall_ns", "source", "entity", "payload"],
+  "properties": {
+    "schema": {"const": "isacsim.record/1"},
+    "run_id": {"type": "string"},
+    "stream": {"type": "string", "pattern": "^(sensing|v2x|uu|auth|control|task|link|graph)\\."},
+    "ts_ns": {"type": "integer"},
+    "t_wall_ns": {"type": "integer"},
+    "source": {"type": "string"},
+    "entity": {"type": "string", "pattern": "^(veh|rsu|gnb|obj|attacker|net|MEC|graph):"},
+    "payload": {"type": "object"}
+  },
+  "additionalProperties": false
+}

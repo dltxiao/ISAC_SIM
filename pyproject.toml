@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "isacsim"
+version = "0.1.0"
+description = "车联网跨层攻击模拟环境（SUMO + 自研感知/通信/控制层 + Web 控制台）"
+requires-python = ">=3.11"
+dependencies = [
+    "eclipse-sumo>=1.20,<1.29",
+    "numpy>=1.26",
+    "PyYAML>=6.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+]
+
+[project.optional-dependencies]
+dataset = ["pyarrow>=14"]
+detect = ["scikit-learn>=1.4"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+isacsim = "isacsim.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["isacsim*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

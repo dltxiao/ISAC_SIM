@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<routes>
+    <vType id="car" length="4.5" width="1.8" accel="2.6" decel="4.5" sigma="0.5" maxSpeed="16.7" color="0.85,0.85,0.88"/>
+    <vType id="truck" length="9.0" width="2.4" accel="1.5" decel="4.0" sigma="0.5" maxSpeed="14.0" color="0.55,0.62,0.72"/>
+
+    <!-- 东西向主干道：双方向 -->
+    <flow id="eastbound" type="car" begin="0" end="120" number="120" from="W_C" to="C_E" departLane="best" departSpeed="max"/>
+    <flow id="westbound" type="car" begin="0" end="120" number="90" from="E_C" to="C_W" departLane="best" departSpeed="max"/>
+    <flow id="east_truck" type="truck" begin="0" end="120" number="18" from="W_C" to="C_E" departLane="best" departSpeed="max"/>
+
+    <!-- 南北向支路 -->
+    <flow id="northbound" type="car" begin="0" end="120" number="24" from="S_C" to="C_N" departLane="best" departSpeed="max"/>
+    <flow id="southbound" type="car" begin="0" end="120" number="20" from="N_C" to="C_S" departLane="best" departSpeed="max"/>
+</routes>

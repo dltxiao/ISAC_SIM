@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>ISAC-SIM · 车联网跨层攻击模拟控制台</title>
+<link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">ISAC</span>
+    <div>
+      <h1>车联网跨层攻击模拟环境</h1>
+      <p class="muted" id="runId">未启动</p>
+    </div>
+  </div>
+  <div class="status">
+    <span id="stateBadge" class="badge idle">未启动</span>
+    <div class="metric"><span>仿真时间</span><b id="simTime">0.0 s</b></div>
+    <div class="metric"><span>倍速</span><b id="speedLabel">1.0×</b></div>
+    <div class="metric"><span>在线车辆</span><b id="vehCount">0</b></div>
+  </div>
+  <div class="controls">
+    <button id="btnStart" class="primary">开始</button>
+    <button id="btnPause">暂停</button>
+    <button id="btnResume">继续</button>
+    <button id="btnStop" class="danger">停止</button>
+    <button id="btnReset">复位</button>
+    <label class="speedbox">时长
+      <input id="durationInput" type="number" min="5" max="600" value="60" style="width:64px"/> s
+    </label>
+    <label class="speedbox">倍速
+      <select id="speedSelect">
+        <option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+        <option value="2">2×</option>
+        <option value="4">4×</option>
+        <option value="8">8×</option>
+      </select>
+    </label>
+  </div>
+</header>
+
+<main>
+  <section class="stage">
+    <canvas id="map"></canvas>
+    <div class="legend">
+      <span><i class="dot car"></i>普通车辆</span>
+      <span><i class="dot truck"></i>大型车</span>
+      <span><i class="dot victim"></i>被攻击</span>
+      <span><i class="dot rsu"></i>RSU</span>
+      <span><i class="dot gnb"></i>gNB</span>
+      <span><i class="dot ghost"></i>幽灵目标</span>
+    </div>
+    <div class="hint" id="mapHint">启动仿真后显示实时车辆与攻击叠加</div>
+    <div class="tooltip" id="tooltip"></div>
+  </section>
+
+  <aside class="panel">
+    <nav class="tabs">
+      <button data-tab="entities" class="active">参与实体</button>
+      <button data-tab="stats">统计</button>
+      <button data-tab="attack">攻击编排</button>
+      <button data-tab="logs">事件日志</button>
+      <button data-tab="runs">运行产物</button>
+    </nav>
+
+    <div class="tab-pane active" id="tab-entities">
+      <div class="summary" id="entitySummary"></div>
+      <div class="table-wrap">
+        <table class="grid" id="vehicleTable">
+          <thead><tr><th>实体</th><th>类型</th><th>速度</th><th>标记</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="tab-pane" id="tab-stats">
+      <div class="cards">
+        <div class="card"><span>数据总量</span><b id="statRecords">0</b><small id="statBytes">0 MB</small></div>
+        <div class="card"><span>单体攻击</span><b id="statPrim">0</b><small id="statPrimRec">0 条注入</small></div>
+        <div class="card"><span>跨层攻击</span><b id="statCamp">0</b><small id="statCampState">进行 0 / 完成 0</small></div>
+        <div class="card"><span>告警</span><b id="statAlerts">0</b><small id="statEntities">0 个异常实体</small></div>
+        <div class="card"><span>检测时延 P95</span><b id="statLatency">0 ms</b><small id="statLatencyN">n=0</small></div>
+      </div>
+      <h3>跨层攻击类型</h3>
+      <div id="campaignTypes" class="typelist"></div>
+      <h3>数据流明细</h3>
+      <div class="table-wrap tall">
+        <table class="grid" id="streamTable">
+          <thead><tr><th>数据流</th><th>记录数</th><th>数据量</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="tab-pane" id="tab-attack">
+      <form id="attackForm" class="form">
+        <label>攻击类型
+          <select id="attackType">
+            <optgroup label="跨层攻击剧本">
+              <option value="A1">A1 感知篡改 → 通信拥塞</option>
+              <option value="A2">A2 物理欺骗 + 控制误导</option>
+              <option value="A3">A3 跨层隐蔽（雷达回波渐偏）</option>
+              <option value="A4">A4 双因素仿冒</option>
+            </optgroup>
+            <optgroup label="单体攻击原语">
+              <option value="ghost_object">伪造感知目标</option>
+              <option value="range_bias">雷达距离偏置</option>
+              <option value="echo_suppress">雷达回波删除</option>
+              <option value="denm_flood">DENM 洪泛</option>
+              <option value="jam">链路干扰</option>
+              <option value="id_clone">标识克隆</option>
+              <option value="brake_inject">制动指令注入</option>
+              <option value="gnss_spoof">GNSS 欺骗</option>
+            </optgroup>
+          </select>
+        </label>
+        <div class="row">
+          <label>数量 <input id="attackCount" type="number" min="1" max="20" value="1"/></label>
+          <label>时长(s) <input id="attackDuration" type="number" min="2" max="60" value="10"/></label>
+        </div>
+        <label>强度 <input id="attackAmplitude" type="range" min="0.1" max="1" step="0.05" value="0.6"/>
+          <output id="amplitudeOut">0.60</output>
+        </label>
+        <label>起始延迟(s) <input id="attackStart" type="number" min="0" max="120" value="0"/></label>
+        <button type="submit" class="primary" id="btnInject">注入攻击</button>
+        <p class="muted small">剧本会按阶段自动推进；可在下方列表中止。</p>
+      </form>
+      <h3>本次攻击</h3>
+      <div id="attackList" class="attacklist"></div>
+    </div>
+
+    <div class="tab-pane" id="tab-logs">
+      <div class="logtools">
+        <span class="muted small">攻击、检测与系统事件</span>
+        <button id="btnClearLog" class="ghostbtn">清屏</button>
+      </div>
+      <ul id="logList" class="logs"></ul>
+    </div>
+
+    <div class="tab-pane" id="tab-runs">
+      <button id="btnRefreshRuns" class="ghostbtn">刷新</button>
+      <ul id="runList" class="runs"></ul>
+    </div>
+  </aside>
+</main>
+
+<footer>
+  <span id="hwInfo">读取硬件信息…</span>
+  <span id="connInfo" class="muted">未连接</span>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

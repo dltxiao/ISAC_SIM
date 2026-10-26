@@ -1,0 +1,34 @@
+# 城市干道场景：400 m 三车道 + 1 个信号路口 + 3 RSU + 1 个通感基站
+name: arterial
+seed: 11
+duration_s: 60
+step_s: 0.05
+net: assets/nets/arterial/net.net.xml
+route: assets/routes/arterial.rou.xml
+
+sensors:
+  - {id: RSU-01, kind: rsu, x: 60,  y: 6,  z: 6,  yaw_deg: 0,   fov_deg: 120, range_m: 220, rate_hz: 10, bias_m: 0.25}
+  - {id: RSU-02, kind: rsu, x: 200, y: 6,  z: 6,  yaw_deg: 0,   fov_deg: 120, range_m: 220, rate_hz: 10, offset_ms: 2.5, bias_m: -0.15}
+  - {id: RSU-03, kind: rsu, x: 340, y: 6,  z: 6,  yaw_deg: 180, fov_deg: 120, range_m: 220, rate_hz: 10, offset_ms: 1.0}
+  - {id: GNB-01, kind: gnb, x: 200, y: -40, z: 25, yaw_deg: 30, fov_deg: 140, range_m: 400, rate_hz: 20, offset_ms: -1.2, drift_ppm: 12}
+
+static_objects:
+  - {object_id: 500, cls: stop_sign, x: 199, y: 10,  z: 1.2}
+  - {object_id: 501, cls: obstacle,  x: 330, y: -5.5, z: 0.5}
+
+map:
+  signals: [C]
+  stop_lines:
+    - {x: 200, y_low: -8, y_high: 8}
+
+vehicles:
+  max: 80
+  equipped_ratio: 0.9
+  adas_ratio: 0.6
+
+streams:
+  jsonl: true
+  gzip: false
+  parquet: false
+  graph: true
+  echo: true
