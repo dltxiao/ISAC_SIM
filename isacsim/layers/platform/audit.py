@@ -44,6 +44,11 @@ class AuditLog:
         self.prev_hash = digest
         return rec
 
+    def suppress(self, n: int = 1) -> None:
+        """模拟审计被抑制：只推进序列，不写记录，制造 audit_seq 缺口。"""
+        self.seq += max(0, int(n))
+        self.suppressed += max(0, int(n))
+
     def snapshot(self) -> dict:
         return {
             "enabled": self.enabled,

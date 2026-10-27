@@ -52,10 +52,14 @@ class PlatformLayer:
             self._bootstrap(ctx)
         events = ctx.extras.pop("v2x_outbox", [])
         for event in events:
+            msg_type = Ingest._msg_type(event)
+            active = self.subs.active_for(msg_type)
             self.ingest.ingest(
                 ctx, event,
                 token_id=self.service_token_id or "svc-rsu",
                 tenant=self.tenant,
+                dropped=not bool(active),
+                cause=None if active else "no_subscription",
             )
         self._last_t = ctx.t
         ctx.extras["platform"] = self

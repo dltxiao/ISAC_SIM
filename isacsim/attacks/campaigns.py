@@ -581,5 +581,239 @@ class CampaignA9(AttackInstance):
         return ev
 
 
+
+class CampaignA6(AttackInstance):
+    """切片/QoS 抢占：降级关键流 QoS，拖慢 CPM/远控。"""
+
+    atype = "A6"
+    label = "切片/QoS 抢占"
+
+    def __init__(self, spec: AttackSpec, scene: SceneCfg, seed: int, attack_id: str):
+        super().__init__(spec, scene, seed, attack_id)
+        self.veh_id = ""
+        self.bias = 0.0
+        self._done = False
+
+    def start(self, ctx) -> None:
+        super().start(ctx)
+        core = ctx.extras.get("layers", {}).get("core")
+        platform = ctx.extras.get("layers", {}).get("platform")
+        if core is None or platform is None or not core.smf.sessions:
+            self.finished = True
+            return
+        # 只选已有 PDU 会话的 UE，保证 QoS modify 有落点
+        sessions = sorted(core.smf.sessions)
+        self.veh_id = sessions[self.seed % len(sessions)]
+        if self.veh_id not in ctx.vehicles:
+            self.finished = True
+            return
+        core.smf.modify_qos(ctx, self.veh_id, five_qi=9, gfbr_kbps=100)
+        ctx.extras["platform_ingest_delay_ms"] = 80.0
+        ctx.stats.note("attack", f"A6 将 {self.veh_id} 的 QoS 5QI 79→9")
+
+    def tick(self, ctx) -> None:
+        if not self.started or self.finished or self._done:
+            return
+        self._done = True
+        veh = ctx.vehicles.get(self.veh_id)
+        if veh is None:
+            return
+        ctx.emit("v2x.cpm", "ATK-A6", "attacker:A6", {
+            "msg_type": "cpm", "sender": "ATK-A6", "object_count": 1,
+            "objects": [{"object_id": 6001, "cls": "obstacle",
+                         "x": round(veh.x + 25.0, 2), "y": round(veh.y, 2)}],
+            "delay_ms": 120.0, "lost": True, "degraded": True,
+            "qos": "5qi-9", "forged": True,
+        })
+        control = ctx.extras.get("layers", {}).get("control")
+        if control is not None:
+            control.inject_brake(ctx, self.veh_id, decel=2.0, duration=1.0)
+
+    def stop(self, ctx) -> None:
+        core = ctx.extras.get("layers", {}).get("core")
+        if core is not None:
+            core.smf.modify_qos(ctx, self.veh_id, five_qi=79, gfbr_kbps=1000)
+        ctx.extras.pop("platform_ingest_delay_ms", None)
+        super().stop(ctx)
+
+    def truth(self) -> TruthEvent:
+        ev = super().truth()
+        ev.nodes = ["smf:SMF-01", "upf:UPF-01", "platform:V2X-01",
+                    f"veh:{self.veh_id}", "attacker:A6"]
+        ev.domains = ["core", "app", "v2x", "control"]
+        ev.amplitude = self.spec.amplitude
+        ev.params = {"5qi_from": 79, "5qi_to": 9, "victim": self.veh_id}
+        ev.envelope = {"in_envelope": True, "criterion": "5QI downgrade or latency >= 50ms"}
+        ev.expected_evidence = ["core.qos", "app.ingest", "v2x.cpm", "control.command"]
+        ev.stages = [
+            {"name": "QoS 降级", "t0": round(self.t0, 2), "t1": round(self.t0 + 1.0, 2)},
+            {"name": "CPM 延迟/丢失", "t0": round(self.t0 + 1.0, 2), "t1": round(self.t1, 2)},
+        ]
+        return ev
+
+
+class CampaignA8(AttackInstance):
+    """NEF/订阅篡改：退订关键事件，平台漏掉 DENM/SPaT。"""
+
+    atype = "A8"
+    label = "NEF/订阅篡改"
+
+    def __init__(self, spec: AttackSpec, scene: SceneCfg, seed: int, attack_id: str):
+        super().__init__(spec, scene, seed, attack_id)
+        self.veh_id = ""
+        self._done = False
+        self._token = ""
+        self._sub_id = ""
+
+    def start(self, ctx) -> None:
+        super().start(ctx)
+        core = ctx.extras.get("layers", {}).get("core")
+        platform = ctx.extras.get("layers", {}).get("platform")
+        veh = pick_vehicle(ctx, self.seed, "a8")
+        if core is None or platform is None or veh is None:
+            self.finished = True
+            return
+        self.veh_id = veh.vid
+        token = core.nef.issue_token(
+            ctx, subject="attacker:A8", tenant=platform.tenant,
+            scopes=["nef:subscribe"], ttl_s=30.0,
+        )
+        self._token = token.token_id
+        sub = core.nef.subscribe(ctx, token_id=self._token,
+                                 event_types=["denm", "spat"],
+                                 callback="https://evil.local/events")
+        if sub is not None:
+            self._sub_id = sub.sub_id
+        # 篡改平台默认订阅 + NEF 订阅
+        subs = list(platform.subs.subs.values())
+        if subs:
+            platform.subs.revoke(ctx, subs[0].sub_id)
+        if self._sub_id:
+            core.nef.unsubscribe(ctx, token_id=self._token, sub_id=self._sub_id)
+        ctx.stats.note("attack", f"A8 退订 DENM/SPaT，目标 {self.veh_id}")
+
+    def tick(self, ctx) -> None:
+        if not self.started or self.finished or self._done:
+            return
+        self._done = True
+        control = ctx.extras.get("layers", {}).get("control")
+        if control is not None:
+            control.inject_brake(ctx, self.veh_id, decel=2.5, duration=1.0)
+
+    def stop(self, ctx) -> None:
+        platform = ctx.extras.get("layers", {}).get("platform")
+        if platform is not None and not platform.subs.active_for("denm"):
+            platform.subscribe(ctx, tenant=platform.tenant,
+                               event_types=["cpm", "denm", "spat"],
+                               callback="https://platform.local/events")
+        super().stop(ctx)
+
+    def truth(self) -> TruthEvent:
+        ev = super().truth()
+        ev.nodes = ["nef:NEF-01", "platform:V2X-01", "tenant:city-a",
+                    f"veh:{self.veh_id}", "attacker:A8"]
+        ev.domains = ["core", "app", "v2x", "task", "control"]
+        ev.amplitude = self.spec.amplitude
+        ev.params = {"unsubscribed": ["denm", "spat"], "victim": self.veh_id,
+                     "token": self._token}
+        ev.envelope = {"in_envelope": True, "criterion": "unsubscribe_events >= 1"}
+        ev.expected_evidence = ["core.nef", "app.subscription", "app.ingest",
+                                "v2x.spat", "control.command"]
+        ev.stages = [
+            {"name": "退订平台/NEF 订阅", "t0": round(self.t0, 2), "t1": round(self.t0 + 1.0, 2)},
+            {"name": "平台漏事件", "t0": round(self.t0 + 1.0, 2), "t1": round(self.t1, 2)},
+        ]
+        return ev
+
+
+class CampaignA10(AttackInstance):
+    """跨层隐蔽组合：雷达渐偏 + 轻度信令 + 审计抑制。"""
+
+    atype = "A10"
+    label = "跨层隐蔽组合"
+
+    def __init__(self, spec: AttackSpec, scene: SceneCfg, seed: int, attack_id: str):
+        super().__init__(spec, scene, seed, attack_id)
+        self.veh_id = ""
+        self.sensor_id = ""
+        self.bias_max = 0.0
+        self._last = -1.0
+        self._audit_n = 0
+
+    def start(self, ctx) -> None:
+        super().start(ctx)
+        core = ctx.extras.get("layers", {}).get("core")
+        platform = ctx.extras.get("layers", {}).get("platform")
+        veh = pick_vehicle(ctx, self.seed, "a10")
+        if core is None or platform is None or veh is None:
+            self.finished = True
+            return
+        self.veh_id = veh.vid
+        self.sensor_id = "RSU-01"
+        self.bias_max = 1.0 + 2.0 * max(0.0, min(1.0, self.spec.amplitude))
+        entity = f"veh:{self.veh_id}"
+
+        def hook(payload, _ctx):
+            if payload.get("entity") != entity:
+                return payload
+            frac = max(0.0, min(1.0, (_ctx.t - self.t0) / max(self.spec.duration, 1e-6)))
+            payload["range_m"] = round(float(payload["range_m"]) + self.bias_max * frac, 3)
+            return payload
+
+        self.hook(ctx, "sensing.radar.echo", hook)
+        platform.audit.append(ctx, actor="attacker:A10", action="probe",
+                              resource="audit", result="accept")
+        platform.audit.suppress(2)
+        ctx.stats.note("attack", f"A10 雷达渐偏 {self.bias_max:.1f}m + 审计抑制")
+
+    def tick(self, ctx) -> None:
+        if not self.started or self.finished:
+            return
+        if ctx.t - self._last >= 0.2:
+            self._last = ctx.t
+            for i in range(5):
+                ctx.emit("core.nas", f"ue:bot-a10-{i}", "amf:AMF-01", {
+                    "msg_type": "registration_request",
+                    "ue_id": f"bot-a10-{i}",
+                    "gnb_id": "GNB-01",
+                    "result": "reject",
+                    "cause": "congestion",
+                    "bot": True,
+                    "latency_ms": 8.0,
+                })
+        if self._audit_n < 2 and ctx.t >= self.t0 + self.spec.duration * 0.6:
+            self._audit_n += 1
+            platform = ctx.extras.get("layers", {}).get("platform")
+            if platform is not None:
+                platform.audit.append(ctx, actor="attacker:A10", action="probe",
+                                      resource="audit", result="accept")
+                platform.audit.suppress(1)
+            control = ctx.extras.get("layers", {}).get("control")
+            if control is not None:
+                control.inject_brake(ctx, self.veh_id, decel=1.2, duration=0.8)
+
+    def truth(self) -> TruthEvent:
+        ev = super().truth()
+        ev.nodes = [f"rsu:{self.sensor_id}", "amf:AMF-01", "platform:V2X-01",
+                    f"veh:{self.veh_id}", "attacker:A10"]
+        ev.domains = ["radar", "perception", "core", "app", "control"]
+        ev.amplitude = self.spec.amplitude
+        ev.params = {"bias_max_m": self.bias_max, "victim": self.veh_id,
+                     "signaling_rate": 25.0}
+        ev.envelope = {"in_envelope": self.bias_max >= 1.0,
+                       "criterion": "bias >= 1.0m and signaling_rate >= 2x"}
+        ev.expected_evidence = ["sensing.radar.track", "core.nas", "app.audit",
+                                "control.command"]
+        ev.stages = [
+            {"name": "雷达回波渐偏", "t0": round(self.t0, 2), "t1": round(self.t1, 2)},
+            {"name": "轻度信令扰动", "t0": round(self.t0 + 1.0, 2), "t1": round(self.t1, 2)},
+            {"name": "审计抑制/小指令", "t0": round(self.t0 + self.spec.duration * 0.6, 2),
+             "t1": round(self.t1, 2)},
+        ]
+        return ev
+
+
 CAMPAIGNS = {"A1": CampaignA1, "A2": CampaignA2, "A3": CampaignA3,
-             "A4": CampaignA4, "A5": CampaignA5, "A7": CampaignA7, "A9": CampaignA9}
+             "A4": CampaignA4, "A5": CampaignA5, "A6": CampaignA6,
+             "A7": CampaignA7, "A8": CampaignA8, "A9": CampaignA9,
+             "A10": CampaignA10}

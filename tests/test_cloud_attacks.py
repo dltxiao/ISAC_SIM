@@ -87,3 +87,37 @@ def test_defense_actions_and_token_revoke():
         assert [r for r in sink.records if r.stream == "app.control"][-1].payload["result"] == "reject"
     finally:
         sim.stop()
+
+
+def test_a6_qos_downgrade():
+    sim, sink, det = _run("A6")
+    ev = sim.truth.events[0].to_dict()
+    assert {"core", "app", "v2x", "control"} <= set(ev["domains"])
+    mods = [r.payload for r in sink.records
+            if r.stream == "core.qos" and r.payload.get("msg_type") == "qos_flow_modify"]
+    assert any(int(m["5qi"]) <= 9 for m in mods)
+    assert "qos_downgrade" in det.snapshot()["by_rule"]
+    assert any(r.payload.get("result") == "accept" and r.payload.get("latency_ms", 0) >= 50
+               for r in sink.records if r.stream == "app.ingest")
+
+
+def test_a8_subscription_tamper():
+    sim, sink, det = _run("A8")
+    ev = sim.truth.events[0].to_dict()
+    assert {"core", "app", "v2x", "task", "control"} <= set(ev["domains"])
+    assert any(r.stream == "core.nef" and r.payload.get("msg_type") == "api_unsubscribe"
+               for r in sink.records)
+    assert any(r.stream == "app.subscription" and r.payload.get("action") == "revoke"
+               for r in sink.records)
+    assert any(r.stream == "app.ingest" and r.payload.get("cause") == "no_subscription"
+               for r in sink.records)
+    assert "subscription_tamper" in det.snapshot()["by_rule"]
+
+
+def test_a10_covert_combination():
+    sim, sink, det = _run("A10")
+    ev = sim.truth.events[0].to_dict()
+    assert {"radar", "perception", "core", "app", "control"} <= set(ev["domains"])
+    assert any(r.stream == "app.audit" for r in sink.records)
+    assert "audit_gap" in det.snapshot()["by_rule"]
+    assert "nas_registration_flood" in det.snapshot()["by_rule"]

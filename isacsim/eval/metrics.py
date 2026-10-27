@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .chain_metrics import aggregate as aggregate_chains, compare as compare_chain
+
 
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     if n <= 0:
@@ -88,6 +90,7 @@ def evaluate_runs(run_dirs: list[Path]) -> dict[str, Any]:
     by_type: dict[str, dict[str, int]] = {}
     latencies: list[float] = []
     per_run: list[dict[str, Any]] = []
+    chain_rows: list[dict[str, Any]] = []
 
     for run in run_dirs:
         truth_path = run / "truth" / "events.jsonl"
@@ -99,6 +102,13 @@ def evaluate_runs(run_dirs: list[Path]) -> dict[str, Any]:
         alerts = []
         if alerts_path.exists():
             alerts = [json.loads(line) for line in alerts_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        chains: list[dict[str, Any]] = []
+        chain_path = run / "chains.json"
+        if chain_path.exists():
+            try:
+                chains = json.loads(chain_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                chains = []
         meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
         detected = cluster_alerts(alerts)
         latencies.extend(a.get("latency_ms", 0.0) for a in alerts if a.get("latency_ms"))
@@ -114,15 +124,31 @@ def evaluate_runs(run_dirs: list[Path]) -> dict[str, Any]:
         attack_events += len(truth)
         n_hit, hit_idx, unmatched = match_events(truth, detected)
         hits += n_hit
+        run_chain_rows: list[dict[str, Any]] = []
         for i, ev in enumerate(truth):
             t = ev["campaign"]
             slot = by_type.setdefault(t, {"n": 0, "hit": 0})
             slot["n"] += 1
             if i in hit_idx:
                 slot["hit"] += 1
+            best = None
+            best_ov = 0.0
+            for chain in chains:
+                ov = overlap(ev["t0"], ev["t1"], chain.get("t0", 0.0),
+                             chain.get("t1", 0.0))
+                if ov >= best_ov:
+                    best_ov, best = ov, chain
+            row = compare_chain(ev, best or {"nodes": [], "stages": [], "root_cause": None})
+            row["campaign"] = t
+            run_chain_rows.append(row)
+            chain_rows.append(row)
         per_run.append({"run": run.name, "kind": "attack", "truth": len(truth),
                         "hit": n_hit, "detected": len(detected),
-                        "unmatched_detections": len(unmatched), "alerts": len(alerts)})
+                        "unmatched_detections": len(unmatched), "alerts": len(alerts),
+                        "chains": len(chains),
+                        "chain_node_recall": round(
+                            sum(r["node_recall"] for r in run_chain_rows) /
+                            max(1, len(run_chain_rows)), 4)})
 
     recall = hits / attack_events if attack_events else 0.0
     fpr = normal_with_alerts / normal_runs if normal_runs else 0.0
@@ -145,6 +171,7 @@ def evaluate_runs(run_dirs: list[Path]) -> dict[str, Any]:
         "fpr": {"point": round(fpr, 4), "lower95": round(f_lo, 4), "upper95": round(f_hi, 4)},
         "detect_latency_ms": {"p50": q(0.5), "p95": q(0.95), "p99": q(0.99), "n": len(lat_sorted)},
         "by_type": by_type,
+        "chain": aggregate_chains(chain_rows),
         "per_run": per_run,
     }
 
@@ -160,10 +187,19 @@ def render_report(result: dict[str, Any]) -> str:
         f"- 识别率：{r['point']:.2%}（95% CI {r['lower95']:.2%} – {r['upper95']:.2%}，命中 {result['hits']}/{result['attack_events']}）",
         f"- 误检率：{f['point']:.2%}（95% CI {f['lower95']:.2%} – {f['upper95']:.2%}，误报 {result['false_positive_runs']}/{result['normal_runs']}）",
         f"- 检测时延（ingest→decide）：P50 {lat['p50']} ms / P95 {lat['p95']} ms / P99 {lat['p99']} ms（n={lat['n']}）",
+    ]
+    chain = result.get("chain") or {}
+    if chain.get("chains"):
+        lines.append(
+            f"- 链级：节点召回 {chain['node_recall']:.2%} / 精确率 {chain['node_precision']:.2%} / "
+            f"根因 top-1 {chain['root_cause_top1']:.2%} / 阶段覆盖 {chain['stage_ratio']:.2%} "
+            f"（{chain['chains']} 条）"
+        )
+    lines.extend([
         "",
         "| 类型 | 事件数 | 命中 | 识别率 |",
         "|---|---|---|---|",
-    ]
+    ])
     for k in sorted(result["by_type"]):
         v = result["by_type"][k]
         lines.append(f"| {k} | {v['n']} | {v['hit']} | {v['hit'] / max(1, v['n']):.2%} |")

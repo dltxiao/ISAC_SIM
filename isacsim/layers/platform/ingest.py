@@ -37,6 +37,7 @@ class Ingest:
 
     def ingest(self, ctx, event: dict[str, Any], *, token_id: str,
                tenant: str, provenance: str = "dn:DN-01",
+               dropped: bool = False, cause: str | None = None,
                trace=None) -> dict[str, Any] | None:
         msg_type = self._msg_type(event)
         source = self._source(event)
@@ -45,6 +46,7 @@ class Ingest:
             self.rejected += 1
         self.count += 1
         latency = 2.0 + float(ctx.extras.get("platform_ingest_delay_ms", 0.0))
+        result = "dropped" if dropped else ("accept" if ok else "reject")
         payload = {
             "msg_type": msg_type,
             "platform_id": "platform:V2X-01",
@@ -53,7 +55,8 @@ class Ingest:
             "token_id": token_id,
             "tenant": tenant,
             "schema_ok": ok,
-            "result": "accept" if ok else "reject",
+            "result": result,
+            "cause": cause,
             "latency_ms": round(latency, 3),
         }
         ctx.emit("app.ingest", source, "platform:V2X-01", payload, trace=trace)

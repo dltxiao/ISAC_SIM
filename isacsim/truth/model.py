@@ -18,8 +18,11 @@ OFFICIAL_TYPES = {
     "A3": "跨层隐蔽攻击",
     "A4": "双因素仿冒攻击",
     "A5": "5G-A 信令风暴",
+    "A6": "切片/QoS 抢占",
     "A7": "UPF/N6 流量劫持",
+    "A8": "NEF/订阅篡改",
     "A9": "平台越权/云控注入",
+    "A10": "跨层隐蔽组合",
 }
 
 OFFICIAL_CHAIN = {
@@ -34,6 +37,11 @@ OFFICIAL_CHAIN = {
            "control.command:inject"],
     "A9": ["app.auth:token_reuse", "app.control:burst", "control.command:batch_brake",
            "v2x.denm:emergency"],
+    "A6": ["core.qos:downgrade", "upf:queue_up", "v2x.cpm:loss", "control.command:late"],
+    "A8": ["core.nef:unsubscribe", "app.subscription:revoke", "app.ingest:drop",
+           "control.command:inject"],
+    "A10": ["radar.echo:range_ramp", "core.nas:mild_flood", "app.audit:suppress",
+            "control.command:small"],
 }
 
 

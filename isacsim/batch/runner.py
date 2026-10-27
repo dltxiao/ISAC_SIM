@@ -49,6 +49,7 @@ def _run_one(job: Job) -> dict[str, Any]:
         sim.run()
     finally:
         detector.dump(out / "alerts.jsonl")
+        detector.dump_chains(out / "chains.json")
         (out / "meta.json").write_text(json.dumps({
             "kind": job.kind, "type": job.atype, "seed": job.seed,
             "duration": job.duration, "amplitude": job.amplitude,

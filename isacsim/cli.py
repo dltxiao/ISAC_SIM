@@ -83,6 +83,7 @@ def cmd_run(args) -> int:
     sim.run()
     if detector is not None:
         detector.dump(out / "alerts.jsonl")
+        detector.dump_chains(out / "chains.json")
     snap = sim.snapshot()
     _print({k: snap[k] for k in ("state", "sim_time", "records_total", "bytes_total",
                                  "attacks", "truth_events")})

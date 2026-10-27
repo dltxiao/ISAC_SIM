@@ -96,6 +96,33 @@ class SMF(NetworkFunction):
             due_t=ctx.t + 0.002, trace=self.factory.child(tr),
         )
 
+    def modify_qos(self, ctx, ue_id: str, *, five_qi: int,
+                   gfbr_kbps: int = 100, trace=None) -> bool:
+        session = self.sessions.get(ue_id)
+        if session is None:
+            return False
+        qos = session.qos_flows.get(1)
+        if qos is None:
+            qos = QoSProfile(qfi=1)
+            session.qos_flows[1] = qos
+        old = qos.five_qi
+        qos.five_qi = int(five_qi)
+        qos.gfbr_kbps = int(gfbr_kbps)
+        tr = trace or self.factory.new_trace()
+        ctx.emit("core.qos", self.entity, session.upf_id, {
+            "msg_type": "qos_flow_modify",
+            "ue_id": ue_id,
+            "pdu_session_id": session.session_id,
+            "qfi": 1,
+            "5qi": int(five_qi),
+            "gfbr_kbps": int(gfbr_kbps),
+            "mfbr_kbps": max(int(gfbr_kbps), 2000),
+            "old_5qi": old,
+            "result": "accept",
+            "latency_ms": 2.0,
+        }, trace=tr)
+        return True
+
     def _release(self, msg, ctx) -> None:
         ue_id = str(msg.payload.get("ue_id", ""))
         session = self.sessions.pop(ue_id, None)
