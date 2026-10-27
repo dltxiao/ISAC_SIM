@@ -13,13 +13,29 @@ from typing import Any
 
 from ..config import SceneCfg
 from ..truth.model import TruthEvent
-from ..layers.common import is_equipped
+from ..layers.common import has_adas, is_equipped, serving_sensor
 from .base import (AttackInstance, AttackSpec, ahead, ghost_object, pick_rsu,
-                   pick_vehicle)
+                   pick_vehicle, stable_pick)
 
 
 def _level(amp: float, lo: float, hi: float) -> float:
     return lo + (hi - lo) * max(0.0, min(1.0, amp))
+
+
+def _victim_for_rsu(ctx, rsu, scene: SceneCfg, seed: int, salt: str):
+    """选一个由该 RSU 服务、且装备了 ADAS 的车辆，保证 control 域可观测。"""
+    candidates = []
+    for v in sorted(ctx.vehicles.values(), key=lambda x: x.vid):
+        if not is_equipped(v.vid, scene.vehicles.equipped_ratio):
+            continue
+        if not has_adas(v.vid, scene.vehicles.adas_ratio):
+            continue
+        if getattr(v, "speed", 0.0) < 2.0:
+            continue
+        sensor = serving_sensor(v, [rsu])
+        if sensor is not None and sensor.id == rsu.id:
+            candidates.append(v)
+    return stable_pick(candidates, seed, salt)
 
 
 class CampaignA1(AttackInstance):
@@ -38,7 +54,15 @@ class CampaignA1(AttackInstance):
     def start(self, ctx) -> None:
         super().start(ctx)
         rsu = pick_rsu(self.scene, ctx, self.seed)
-        veh = pick_vehicle(ctx, self.seed, "a1")
+        veh = _victim_for_rsu(ctx, rsu, self.scene, self.seed, "a1") if rsu else None
+        if veh is None:
+            # 备选：按 RSU 顺序找一个可服务的 ADAS 车辆
+            for alt in sorted((s for s in self.scene.sensors if s.kind == "rsu"),
+                              key=lambda s: s.id):
+                veh = _victim_for_rsu(ctx, alt, self.scene, self.seed, "a1")
+                if veh is not None:
+                    rsu = alt
+                    break
         if veh is None or rsu is None:
             self.finished = True
             return
@@ -307,7 +331,7 @@ class CampaignA4(AttackInstance):
     def truth(self) -> TruthEvent:
         ev = super().truth()
         ev.nodes = [f"veh:{self.victim}", "attacker:A4"]
-        ev.domains = ["auth", "v2x", "uu"]
+        ev.domains = ["auth", "v2x"]
         ev.amplitude = self.spec.amplitude
         ev.params = {"victim": self.victim, "spoof_rate": self.spoof_rate,
                      "fingerprint": self._fp}

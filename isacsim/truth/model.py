@@ -23,7 +23,8 @@ OFFICIAL_CHAIN = {
     "A1": ["sensing.objects:inject", "adas:ttc_brake", "denm:flood", "pc5:cbr_up"],
     "A2": ["sensing.objects:spoof_sign", "control.command:inject", "link:jam", "veh:hard_brake"],
     "A3": ["radar.echo:range_ramp", "radar.track:bias", "control.command:inject", "telemetry:mask"],
-    "A4": ["auth.cert:clone", "auth.fingerprint:replay", "v2x.cam:spoof", "uu:ghost_attach"],
+    # A4 当前只作用于认证与 V2X；uu:ghost_attach 尚未实现，不能写进真值。
+    "A4": ["auth.cert:clone", "auth.fingerprint:replay", "v2x.cam:spoof"],
 }
 
 
@@ -41,12 +42,13 @@ class TruthEvent:
     stages: list[dict[str, Any]] = field(default_factory=list)
     causal_chain: list[str] = field(default_factory=list)
     expected_evidence: list[str] = field(default_factory=list)
+    chain: dict[str, Any] | None = None
     label: int = 1
     seed: int = 0
     generator_version: str = GENERATOR_VERSION
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "event_id": self.event_id,
             "campaign": self.campaign,
             "official_type": OFFICIAL_TYPES.get(self.campaign, self.campaign),
@@ -64,6 +66,9 @@ class TruthEvent:
             "seed": self.seed,
             "generator_version": self.generator_version,
         }
+        if self.chain is not None:
+            out["chain"] = self.chain
+        return out
 
 
 class TruthStore:

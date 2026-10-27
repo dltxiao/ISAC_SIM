@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "isacsim"
-version = "0.2.0"
+version = "0.3.0"
 description = "车联网跨层攻击模拟环境（SUMO + 自研感知/通信/控制层 + Web 控制台）"
 requires-python = ">=3.11"
 dependencies = [
