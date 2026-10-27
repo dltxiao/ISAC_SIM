@@ -168,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed", type=int, default=11)
     p.add_argument("--duration", type=float, default=None)
     p.add_argument("--out", default="out")
-    p.add_argument("-a", "--attack", default=None, help="A1,A2,A3,A4 或原语，逗号分隔")
+    p.add_argument("-a", "--attack", default=None, help="A1–A10 或原语，逗号分隔")
     p.add_argument("--attack-duration", type=float, default=10.0)
     p.add_argument("--attack-start", type=float, default=3.0)
     p.add_argument("--amplitude", type=float, default=0.6)

@@ -58,13 +58,13 @@ def main(url: str = "http://127.0.0.1:8080") -> int:
         page.click("#btnPause")
         page.wait_for_timeout(800)
         badge = page.inner_text("#stateBadge")
-        print(f"[4] 暂停：状态={badge}")
+        print(f"[5] 暂停：状态={badge}")
         assert badge == "已暂停"
 
         page.screenshot(path="out/ui_smoke.png", full_page=True)
         page.click("#btnStop")
         page.wait_for_timeout(1500)
-        print("[5] 停止：", page.inner_text("#stateBadge"))
+        print("[6] 停止：", page.inner_text("#stateBadge"))
 
         browser.close()
 
