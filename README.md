@@ -47,8 +47,8 @@ python3 -m venv .venv
 | `isacsim/layers/platform/` | API/IAM/订阅/Ingest/云控/审计，输出 `app.*` 流 |
 | `isacsim/attacks/` | A1–A4 官方剧本 + A5/A7/A9 扩展剧本 + 8 类单体原语 + 运行时调度器 |
 | `isacsim/truth/` | 事件级真值（与检测隔离） |
-| `isacsim/detect/` | 参考检测器（分域规则 + 跨层关联，仅用于验证环境） |
-| `isacsim/eval/` | 告警聚类、事件匹配、Wilson 置信区间、Markdown 报表 |
+| `isacsim/detect/` | 参考检测器（分域规则 + 跨层关联）+ 告警级链构建器 |
+| `isacsim/eval/` | 告警聚类、事件匹配、Wilson 置信区间、链级指标、Markdown 报表 |
 | `isacsim/batch/` | 多进程数据集生成 |
 | `isacsim/io/` | 原生 JSONL/Parquet、pcapng、5G-A-NIDD 适配器 |
 | `isacsim/web/` | FastAPI + SSE + Canvas 控制台 |

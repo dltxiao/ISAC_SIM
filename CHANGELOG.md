@@ -15,6 +15,9 @@
 - **扩展剧本**（M3）：A5 信令风暴（AMF 过载/会话失败/平台延迟/远控）、A7 UPF/N6 路由劫持 + 伪造 CPM、A9 租户 token 复用 + 批量云控。
 - **防御动作**：`defense.action`；`amf_rate_limit`、`smf_release_session`、`upf_route_restore`、`platform_revoke_token`、`platform_quarantine_source`。
 - **新检测规则**：`nas_registration_flood`、`upf_route_drift`、`ingest_provenance_mismatch`、`cloud_control_burst`。
+- **A6/A8/A10**（M4）：QoS 降级、NEF/订阅篡改、雷达+信令+审计抑制组合。
+- **链构建器**：`detect/chain.py` 输出 `chains.json`；`eval/chain_metrics.py` 计算节点召回/精确率、根因 top-1、阶段覆盖。
+- **链级实测**（20+20，A1–A10）：节点召回 55.28%、精确率 100%、根因 top-1 70%、阶段覆盖 100%。
 
 ### 修复
 
@@ -24,7 +27,7 @@
 
 ### 测试
 
-- 45 项测试通过（新增 core/truth consistency/platform/cloud attacks 等）。
+- 50 项测试通过（新增 core/truth consistency/platform/cloud attacks/chain 等）。
 
 ---
 
