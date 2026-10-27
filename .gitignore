@@ -8,3 +8,5 @@ out/
 runs/
 .isacsim_bench.json
 .DS_Store
+
+figs/.cache/
