@@ -1,5 +1,28 @@
 # 更新记录
 
+## v0.3.0-dev（未发布）
+
+### 新增
+
+- **语义级 5G-A 核心网**（M0/M1）：AMF/SMF/UPF/UDM/AUSF 状态机与 CoreBus；注册、鉴权、PDU 会话、QoS flow、TEID/流表；输出 `core.nas`/`core.session`/`core.qos`/`core.handover`/`core.upf`。
+- **Record/Truth v2**：`isacsim.record/2`，增加可选 `trace_id`/`span_id`/`parent_span_id`/`chain_id`；新增 `schemas/record.v2.json`、`schemas/truth.v2.json`。
+- **Uu 几何驱动**：附着/切换基于 gNB 覆盖与 FOV，不再按 12–35 s 定时器翻转 `CELL-1/2`；`uu.session` 带 `gnb_id`/`pdu_session_id`/`5qi`/`latency_ms`。
+- **图 v2**：节点带 `layer`，新增 `veh→gNB` 无线边与 `gNB→AMF→SMF→UPF→DN` 核心网边。
+- **真值一致性测试**：A1–A4 的 `domains` 必须能在本次运行的观测流中找到对应证据。
+- **Core 测试**：注册/会话/QoS/UPF、trace 传播、core 关闭、Uu attach、A4 truth 修复。
+
+### 修复
+
+- A4 真值移除未实现的 `uu:ghost_attach` / `uu` 域；A4 只声明实际可观测的 `auth`、`v2x`。
+- A1 改为选择“由目标 RSU 服务且装备 ADAS”的车辆，保证 `control` 域可观测。
+- 记录 schema 升为 v2；版本号 → `0.3.0`。
+
+### 测试
+
+- 36 项测试通过（新增 core/truth consistency 等）。
+
+---
+
 ## v0.2.0（2026-10-27）
 
 ### 新增

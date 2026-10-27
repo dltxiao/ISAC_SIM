@@ -1,8 +1,8 @@
 # ISAC-SIM：车联网跨层攻击模拟环境
 
-当前版本：**v0.2.0**（见 [CHANGELOG](CHANGELOG.md)）
+当前版本：**v0.3.0-dev**（见 [CHANGELOG](CHANGELOG.md)）
 
-单机运行的车联网（V2X）跨层攻击模拟环境：**SUMO 车流 + 自研感知/通信/认证/控制层 + 跨层攻击剧本 + 独立真值 + Web 控制台 + 事件级评估**。
+单机运行的车联网（V2X）跨层攻击模拟环境：**SUMO 车流 + 自研感知/通信/认证/控制层 + 语义级 5G-A 核心网 + 跨层攻击剧本 + 独立真值 + Web 控制台 + 事件级评估**。
 
 面向任务②"动态安全威胁建模与协同防御研究"的核心指标：
 
@@ -42,7 +42,8 @@ python3 -m venv .venv
 | 模块 | 说明 |
 |---|---|
 | `isacsim/world/` | SUMO 后端（TraCI 订阅、动态增删、制动执行器）、几何工具 |
-| `isacsim/layers/` | 感知（回波/点迹/目标列表/GNSS）、V2X（CAM/CPM/DENM/SPaT、CBR/DCC）、Uu、认证指纹、ADAS 控制、任务、图快照 |
+| `isacsim/layers/` | 感知（回波/点迹/目标列表/GNSS）、V2X（CAM/CPM/DENM/SPaT、CBR/DCC）、Uu（gNB 覆盖驱动）、语义核心网、认证指纹、ADAS 控制、任务、图快照 |
+| `isacsim/layers/core/` | AMF/SMF/UPF/UDM/AUSF 语义状态机、CoreBus、注册/鉴权/PDU 会话/QoS/TEID |
 | `isacsim/attacks/` | A1–A4 跨层剧本 + 8 类单体原语 + 运行时调度器 |
 | `isacsim/truth/` | 事件级真值（与检测隔离） |
 | `isacsim/detect/` | 参考检测器（分域规则 + 跨层关联，仅用于验证环境） |
@@ -69,5 +70,6 @@ python3 -m venv .venv
 ## 重要边界
 
 - **参考检测器不是项目交付物**：它是验证"环境可用、指标可达"的基线，最终检测模型由合作单位提供；接口与数据格式对其开放。
+- **核心网是语义级**：AMF/SMF/UPF/UDM/AUSF 为进程内状态机，不是 Open5GS/真实协议栈，不承诺 pcap/DPI 兼容；边界见 [详细设计](docs/10-通信层语义级拓展详细设计.md)。
 - 感知为**参数化数值模型**（回波参数/点迹/目标列表），不做电磁仿真与图像渲染；"伪造停止牌"以目标级实现。
 - 真值只由生成器产出，检测侧不可读；Web 上的真值视图仅供运维演示。
