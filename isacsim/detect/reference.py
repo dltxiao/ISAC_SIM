@@ -256,11 +256,14 @@ class ReferenceDetector:
             if not lat:
                 return 0.0
             return round(lat[min(len(lat) - 1, int(p * (len(lat) - 1)))], 3)
+        chains = self.chains()
         return {
             "total": len(self.alerts),
             "by_rule": dict(by_rule),
             "latency_ms": {"p50": q(0.5), "p95": q(0.95), "p99": q(0.99), "n": len(lat)},
             "recent": [a.to_dict() for a in self.alerts[-30:]],
+            "chain_count": len(chains),
+            "chains": chains[-10:],
         }
 
     def chains(self) -> list[dict[str, Any]]:

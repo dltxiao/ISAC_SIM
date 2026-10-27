@@ -78,4 +78,6 @@ class SimContext:
         self.sink.emit(rec)
         if self.detector is not None:
             self.detector.on_record(rec)
+        if stream == "defense.action" and self.stats is not None:
+            self.stats.add_defense(payload)
         return payload

@@ -19,6 +19,12 @@
     A2: "物理欺骗+控制误导",
     A3: "跨层隐蔽",
     A4: "双因素仿冒",
+    A5: "信令风暴→远控失控",
+    A6: "切片/QoS 抢占",
+    A7: "UPF/N6 劫持",
+    A8: "NEF/订阅篡改",
+    A9: "平台越权/云控注入",
+    A10: "跨层隐蔽组合",
   };
   const CAMPAIGN_COLORS = { A1: "#e05a5a", A2: "#f0a93b", A3: "#b07ae0", A4: "#3fc8e0" };
 
@@ -266,7 +272,7 @@
 
     const box = $("campaignTypes");
     box.innerHTML = "";
-    for (const key of ["A1", "A2", "A3", "A4"]) {
+    for (const key of Object.keys(CAMPAIGN_NAMES)) {
       const n = (a.campaigns || {})[key] || 0;
       const div = document.createElement("div");
       div.className = `type ${key}`;
@@ -281,6 +287,75 @@
       const tr = document.createElement("tr");
       tr.innerHTML = `<td>${name}</td><td class="num">${fmtInt(v.records)}</td><td class="num">${fmtMB(v.bytes)}</td>`;
       tbody.appendChild(tr);
+    }
+  }
+
+  function updateInfra(s) {
+    const core = s.core || {};
+    const amf = core.amf || {};
+    const smf = core.smf || {};
+    const upf = core.upf || {};
+    const nef = core.nef || {};
+    const coreItems = [
+      ["附着/注册", `${core.attached || 0} / ${core.registered || 0}`],
+      ["PDU 会话", core.sessions || smf.sessions || 0],
+      ["UPF 流", core.flows || upf.flows || 0],
+      ["AMF 接收/拒绝", `${amf.received || 0} / ${amf.rejected || 0}`],
+      ["NEF token/订阅", `${nef.tokens || 0} / ${nef.subscriptions || 0}`],
+      ["Bus 待处理", core.bus_pending || 0],
+    ];
+    $("coreSummary").innerHTML = coreItems
+      .map(([k, v]) => `<div class="item"><span>${k}</span><b>${v}</b></div>`).join("");
+
+    const p = s.platform || {};
+    const ingest = p.ingest || {};
+    const iam = p.iam || {};
+    const subs = p.subscriptions || {};
+    const disp = p.dispatcher || {};
+    const audit = p.audit || {};
+    const platItems = [
+      ["Ingest QPS", p.qps || 0],
+      ["Ingest 总数", ingest.ingested || 0],
+      ["Token 总数", iam.tokens || 0],
+      ["活跃订阅", subs.active || 0],
+      ["云控下发", disp.sent || 0],
+      ["审计序列/抑制", `${audit.audit_seq || 0} / ${audit.suppressed || 0}`],
+    ];
+    $("platformSummary").innerHTML = platItems
+      .map(([k, v]) => `<div class="item"><span>${k}</span><b>${v}</b></div>`).join("");
+
+    const dt = $("defenseTable").querySelector("tbody");
+    dt.innerHTML = "";
+    const actions = (s.defense_actions || []).slice().reverse();
+    if (!actions.length) {
+      dt.innerHTML = `<tr><td colspan="4" class="muted">暂无防御动作</td></tr>`;
+    } else {
+      for (const a of actions.slice(0, 30)) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${a.action || "—"}</td><td>${a.target || "—"}</td>
+          <td>${a.result || "—"}</td><td class="num">${(a.latency_ms || 0).toFixed(1)} ms</td>`;
+        dt.appendChild(tr);
+      }
+    }
+
+    const det = s.detector || {};
+    const chains = det.chains || [];
+    const cl = $("chainList");
+    cl.innerHTML = "";
+    if (!chains.length) {
+      cl.innerHTML = `<p class="muted small">暂无链级输出</p>`;
+    } else {
+      for (const c of chains.slice().reverse()) {
+        const div = document.createElement("div");
+        div.className = "chain";
+        const nodes = (c.nodes || []).map((n) =>
+          `<span class="node ${n.id === c.root_cause ? "root" : ""}">${n.id}</span>`).join("");
+        div.innerHTML = `<div class="head"><b>${c.chain_id}</b>
+          <span>${(c.t0 || 0).toFixed(1)}–${(c.t1 || 0).toFixed(1)}s · 置信度 ${(c.confidence || 0).toFixed(2)}</span></div>
+          <div class="nodes">${nodes}</div>
+          <div class="meta muted small">根因：${c.root_cause || "—"} · 阶段 ${(c.stages || []).length}</div>`;
+        cl.appendChild(div);
+      }
     }
   }
 
@@ -368,6 +443,7 @@
     }
     updateHeader(s);
     updateStats(s);
+    updateInfra(s);
     updateEntities(s);
     updateAttacks(s);
     pushLogs(s);

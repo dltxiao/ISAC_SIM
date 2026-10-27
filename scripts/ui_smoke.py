@@ -50,6 +50,11 @@ def main(url: str = "http://127.0.0.1:8080") -> int:
         text = page.inner_text("#tab-stats")
         assert "A1" in text
 
+        page.click("button[data-tab='infra']")
+        infra = page.inner_text("#tab-infra")
+        assert "语义核心网" in infra and "V2X 平台" in infra
+        print("[4] 网络/平台视图：", "OK")
+
         page.click("#btnPause")
         page.wait_for_timeout(800)
         badge = page.inner_text("#stateBadge")
