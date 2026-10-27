@@ -52,6 +52,16 @@ class V2XLayer:
         self.delay_ms = 2.0 + 45.0 * self.cbr ** 3 + delay_bonus
 
     # ------------------------------------------------------------------
+    def _outbox(self, ctx, stream: str, payload: dict[str, Any] | None) -> None:
+        """把平台需要消费的消息放入本步 outbox；平台关闭时不累积。"""
+        if payload is None:
+            return
+        if ctx.extras.get("layers", {}).get("platform") is None:
+            return
+        ctx.extras.setdefault("v2x_outbox", []).append({
+            "stream": stream, "payload": payload, "t": ctx.t,
+        })
+
     def tick(self, ctx) -> None:
         t = ctx.t
         step = ctx.step_s
@@ -71,12 +81,13 @@ class V2XLayer:
                 state = ""
                 if ctx.sumo is not None and self.scene.map.get("signals"):
                     state = ctx.sumo.signal_state(self.scene.map["signals"][0])
-                ctx.emit("v2x.spat", sensor.id, f"rsu:{sensor.id}", {
+                payload = ctx.emit("v2x.spat", sensor.id, f"rsu:{sensor.id}", {
                     "msg_type": "spat",
                     "intersection": (self.scene.map.get("signals") or ["C1"])[0],
                     "signal_state": state,
                     "cbr": round(self.cbr, 3),
                 })
+                self._outbox(ctx, "v2x.spat", payload)
 
         # CAM：10 Hz（DCC 降频；紧急事件升频到 20 Hz）
         cam_period = 1.0 / max(1.0, 10.0 * self.dcc_factor)
@@ -122,7 +133,7 @@ class V2XLayer:
                     for o in objs[:12]
                 ]
                 lost = bool(self.rng.random() < self.per)
-                ctx.emit("v2x.cpm", sensor.id, f"rsu:{sensor.id}", {
+                payload = ctx.emit("v2x.cpm", sensor.id, f"rsu:{sensor.id}", {
                     "msg_type": "cpm",
                     "sender": sensor.id,
                     "object_count": len(objs),
@@ -131,6 +142,7 @@ class V2XLayer:
                     "lost": lost,
                     "cbr": round(self.cbr, 3),
                 })
+                self._outbox(ctx, "v2x.cpm", payload)
 
         # DENM：由控制层写入 brake_events
         events = extras.pop("brake_events", [])
@@ -143,7 +155,7 @@ class V2XLayer:
                 continue
             self._denm_sent[vid] = t
             lost = bool(self.rng.random() < self.per)
-            ctx.emit("v2x.denm", vid, f"veh:{vid}", {
+            payload = ctx.emit("v2x.denm", vid, f"veh:{vid}", {
                 "sender_pseudo": vid,
                 "msg_type": "denm",
                 "cause": ev.get("cause", "emergency_brake"),
@@ -153,6 +165,7 @@ class V2XLayer:
                 "lost": lost,
                 "cbr": round(self.cbr, 3),
             })
+            self._outbox(ctx, "v2x.denm", payload)
 
         # 链路指标 10 Hz
         if int(round(t * 10)) != int(round((t - step) * 10)):

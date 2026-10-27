@@ -63,3 +63,25 @@ class AuthResult:
     vector_id: str
     latency_ms: float
     cause: str | None = None
+
+
+@dataclass
+class NefToken:
+    token_id: str
+    subject: str
+    tenant: str
+    scopes: list[str]
+    issued_at: float
+    expires_at: float
+    revoked: bool = False
+
+
+@dataclass
+class NefSubscription:
+    sub_id: str
+    af_id: str
+    tenant: str
+    event_types: list[str]
+    callback: str
+    scopes: list[str]
+    state: str = "ACTIVE"

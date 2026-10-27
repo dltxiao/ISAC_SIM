@@ -51,12 +51,14 @@ class Simulation:
         self.error: str | None = None
         self._started_wall = 0.0
         self._net_json: dict[str, Any] | None = None
+        self.last_ctx = None
 
         from ..attacks.scheduler import AttackScheduler
         from ..layers.auth import AuthLayer
         from ..layers.control import ControlLayer
         from ..layers.core import CoreLayer
         from ..layers.edge import EdgeLayer
+        from ..layers.platform import PlatformLayer
         from ..layers.sensing import SensingLayer
         from ..layers.task import TaskLayer
         from ..layers.uu import UuLayer
@@ -66,6 +68,7 @@ class Simulation:
         self.v2x = V2XLayer(scene)
         self.uu = UuLayer(scene)
         self.core = CoreLayer(scene) if scene.core.enabled else None
+        self.platform = PlatformLayer(scene) if scene.platform.enabled else None
         self.auth = AuthLayer(scene)
         self.control = ControlLayer(scene, self.sensing)
         self.task = TaskLayer(scene)
@@ -122,8 +125,10 @@ class Simulation:
             stats=self.stats, hooks=self.hooks, vehicles=vehicles,
             sumo=self.sumo, truth=self.truth, detector=self.detector,
         )
+        self.last_ctx = ctx
         ctx.extras["layers"] = {"sensing": self.sensing, "control": self.control,
-                                "v2x": self.v2x, "uu": self.uu, "core": self.core}
+                                "v2x": self.v2x, "uu": self.uu,
+                                "core": self.core, "platform": self.platform}
         try:
             self.scheduler.tick(ctx)
             self.sensing.tick(ctx)
@@ -132,6 +137,8 @@ class Simulation:
             if self.core is not None:
                 self.core.tick(ctx)
             self.auth.tick(ctx)
+            if self.platform is not None:
+                self.platform.tick(ctx)
             self.control.tick(ctx)
             self.task.tick(ctx)
             if self.scene.streams.graph:
@@ -206,6 +213,8 @@ class Simulation:
             self.sink.close()
             if self.core is not None:
                 self.core.close()
+            if self.platform is not None:
+                self.platform.close()
             self.truth.write_manifest({
                 "run_id": self.run_id,
                 "scene": self.scene.name,
@@ -253,6 +262,8 @@ class Simulation:
         })
         if self.core is not None:
             snap["core"] = self.core.snapshot()
+        if self.platform is not None:
+            snap["platform"] = self.platform.snapshot()
         if self.detector is not None:
             snap["detector"] = self.detector.snapshot()
         if self.error:

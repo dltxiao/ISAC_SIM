@@ -9,6 +9,7 @@ from ...core.ids import TraceFactory
 from .amf import AMF
 from .ausf import AUSF
 from .bus import CoreBus
+from .nef import NEF
 from .smf import SMF
 from .udm import UDM
 from .upf import UPF
@@ -25,6 +26,7 @@ class CoreLayer:
         self.amf = AMF(scene, self.bus, self.ausf, self.factory)
         self.smf = SMF(scene, self.bus, self.amf, self.factory)
         self.upf = UPF(scene, self.factory)
+        self.nef = NEF(scene, self.factory)
         self.nfs = {
             self.amf.entity: self.amf,
             self.smf.entity: self.smf,
@@ -69,6 +71,7 @@ class CoreLayer:
             "upf": self.upf.snapshot(),
             "udm": self.udm.snapshot(),
             "ausf": self.ausf.snapshot(),
+            "nef": self.nef.snapshot(),
         }
 
     def graph_nodes(self) -> list[dict]:
@@ -78,6 +81,8 @@ class CoreLayer:
             {"id": self.upf.entity, "layer": "core", "kind": "upf"},
             {"id": self.udm.entity, "layer": "core", "kind": "udm"},
             {"id": self.ausf.entity, "layer": "core", "kind": "ausf"},
+            {"id": self.nef.entity, "layer": "core", "kind": "nef"},
+            {"id": "dn:DN-01", "layer": "core", "kind": "dn"},
         ]
 
     def graph_edges(self) -> list[dict]:
@@ -85,6 +90,7 @@ class CoreLayer:
             {"src": self.amf.entity, "dst": self.smf.entity, "kind": "n11", "latency_ms": 1.5},
             {"src": self.smf.entity, "dst": self.upf.entity, "kind": "n4", "latency_ms": 1.0},
             {"src": self.upf.entity, "dst": "dn:DN-01", "kind": "n6", "latency_ms": 3.0},
+            {"src": self.nef.entity, "dst": self.udm.entity, "kind": "n8", "latency_ms": 2.0},
         ]
         for s in self.scene.sensors:
             if s.kind == "gnb":

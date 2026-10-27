@@ -68,6 +68,7 @@ class CoreCfg:
     amf_capacity_tps: float = 5000.0
     smf_capacity_sps: float = 2000.0
     upf_capacity_mbps: float = 10000.0
+    nef_capacity_qps: float = 1000.0
     auth_capacity_tps: float = 3000.0
     queue_capacity: int = 1000
 
@@ -78,6 +79,26 @@ class CoreCfg:
             raise ConfigError("core.queue_capacity 必须为正")
         if not self.plmn or not self.dnn or not self.snssai:
             raise ConfigError("core 的 plmn/dnn/snssai 不能为空")
+
+
+@dataclass
+class PlatformCfg:
+    """语义级 V2X 平台配置；不接真实平台。"""
+
+    enabled: bool = True
+    api_qps: float = 1000.0
+    token_ttl_s: float = 3600.0
+    tenants: list[str] = field(default_factory=lambda: ["city-a"])
+    audit: bool = True
+    dispatch: bool = True
+
+    def __post_init__(self) -> None:
+        if self.api_qps <= 0:
+            raise ConfigError("platform.api_qps 必须为正")
+        if self.token_ttl_s <= 0:
+            raise ConfigError("platform.token_ttl_s 必须为正")
+        if not self.tenants:
+            raise ConfigError("platform.tenants 不能为空")
 
 
 @dataclass
@@ -94,6 +115,7 @@ class SceneCfg:
     vehicles: VehicleCfg = field(default_factory=VehicleCfg)
     streams: StreamCfg = field(default_factory=StreamCfg)
     core: CoreCfg = field(default_factory=CoreCfg)
+    platform: PlatformCfg = field(default_factory=PlatformCfg)
     attacks: list[dict[str, Any]] = field(default_factory=list)
     publish: str | None = None    # 例如 udp://127.0.0.1:9001（可选）
 
@@ -139,11 +161,14 @@ def scene_from_dict(raw: dict[str, Any]) -> SceneCfg:
     vehicles = VehicleCfg(**data.pop("vehicles", {})) if isinstance(data.get("vehicles"), dict) else VehicleCfg()
     streams = StreamCfg(**data.pop("streams", {})) if isinstance(data.get("streams"), dict) else StreamCfg()
     core = CoreCfg(**data.pop("core", {})) if isinstance(data.get("core"), dict) else CoreCfg()
+    platform = (PlatformCfg(**data.pop("platform", {}))
+                if isinstance(data.get("platform"), dict) else PlatformCfg())
     known = {f for f in SceneCfg.__dataclass_fields__}
     unknown = set(data) - known
     if unknown:
         raise ConfigError(f"场景配置含未知字段：{sorted(unknown)}")
-    cfg = SceneCfg(sensors=sensors, vehicles=vehicles, streams=streams, core=core, **data)
+    cfg = SceneCfg(sensors=sensors, vehicles=vehicles, streams=streams,
+                   core=core, platform=platform, **data)
     cfg.validate()
     return cfg
 

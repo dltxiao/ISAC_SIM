@@ -54,6 +54,10 @@ class EdgeLayer:
         if core is not None:
             nodes.extend(core.graph_nodes())
             edges.extend(core.graph_edges())
+        platform = ctx.extras.get("platform") or ctx.extras.get("layers", {}).get("platform")
+        if platform is not None:
+            nodes.extend(platform.graph_nodes())
+            edges.extend(platform.graph_edges())
 
         ctx.emit("graph.snapshot", "MEC", "graph:scene", {
             "t": round(t, 3),
