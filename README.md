@@ -51,7 +51,7 @@ python3 -m venv .venv
 | `isacsim/eval/` | 告警聚类、事件匹配、Wilson 置信区间、链级指标、Markdown 报表 |
 | `isacsim/batch/` | 多进程数据集生成 |
 | `isacsim/io/` | 原生 JSONL/Parquet、pcapng、5G-A-NIDD 适配器 |
-| `isacsim/web/` | FastAPI + SSE + Canvas 控制台 |
+| `isacsim/web/` | FastAPI + SSE + Canvas 控制台；网络/平台/防御/链视图 |
 
 ## 文档
 

@@ -18,6 +18,8 @@
 - **A6/A8/A10**（M4）：QoS 降级、NEF/订阅篡改、雷达+信令+审计抑制组合。
 - **链构建器**：`detect/chain.py` 输出 `chains.json`；`eval/chain_metrics.py` 计算节点召回/精确率、根因 top-1、阶段覆盖。
 - **链级实测**（20+20，A1–A10）：节点召回 55.28%、精确率 100%、根因 top-1 70%、阶段覆盖 100%。
+- **Web 视图**（M5）：网络/平台 tab、核心网/平台摘要、防御动作表、攻击链列表；新增 `/api/core`、`/api/platform`、`/api/chain`、`/api/defense`。
+- **NIDD 导出**（M5）：D4（核心网）、D5（平台）、`defense.jsonl`、`chain.json`。
 
 ### 修复
 
@@ -27,7 +29,7 @@
 
 ### 测试
 
-- 50 项测试通过（新增 core/truth consistency/platform/cloud attacks/chain 等）。
+- 51 项测试通过（新增 core/truth consistency/platform/cloud attacks/chain/API 等）。
 
 ---
 
