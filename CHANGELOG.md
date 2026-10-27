@@ -12,6 +12,9 @@
 - **Core 测试**：注册/会话/QoS/UPF、trace 传播、core 关闭、Uu attach、A4 truth 修复。
 - **语义级 V2X 平台**（M2）：NEF token/订阅 + PlatformLayer（IAM/Ingest/订阅/云控/审计）；输出 `core.nef`、`app.auth`、`app.ingest`、`app.subscription`、`app.control`、`app.audit`。
 - **平台测试**：Ingest、控制意图到 ControlLayer、坏 token 拒绝、NEF token/订阅。
+- **扩展剧本**（M3）：A5 信令风暴（AMF 过载/会话失败/平台延迟/远控）、A7 UPF/N6 路由劫持 + 伪造 CPM、A9 租户 token 复用 + 批量云控。
+- **防御动作**：`defense.action`；`amf_rate_limit`、`smf_release_session`、`upf_route_restore`、`platform_revoke_token`、`platform_quarantine_source`。
+- **新检测规则**：`nas_registration_flood`、`upf_route_drift`、`ingest_provenance_mismatch`、`cloud_control_burst`。
 
 ### 修复
 
@@ -21,7 +24,7 @@
 
 ### 测试
 
-- 41 项测试通过（新增 core/truth consistency/platform 等）。
+- 45 项测试通过（新增 core/truth consistency/platform/cloud attacks 等）。
 
 ---
 
