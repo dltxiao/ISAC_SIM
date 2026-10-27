@@ -43,7 +43,8 @@ python3 -m venv .venv
 |---|---|
 | `isacsim/world/` | SUMO 后端（TraCI 订阅、动态增删、制动执行器）、几何工具 |
 | `isacsim/layers/` | 感知（回波/点迹/目标列表/GNSS）、V2X（CAM/CPM/DENM/SPaT、CBR/DCC）、Uu（gNB 覆盖驱动）、语义核心网、认证指纹、ADAS 控制、任务、图快照 |
-| `isacsim/layers/core/` | AMF/SMF/UPF/UDM/AUSF 语义状态机、CoreBus、注册/鉴权/PDU 会话/QoS/TEID |
+| `isacsim/layers/core/` | AMF/SMF/UPF/NEF/UDM/AUSF 语义状态机、CoreBus、注册/鉴权/PDU 会话/QoS/TEID |
+| `isacsim/layers/platform/` | API/IAM/订阅/Ingest/云控/审计，输出 `app.*` 流 |
 | `isacsim/attacks/` | A1–A4 跨层剧本 + 8 类单体原语 + 运行时调度器 |
 | `isacsim/truth/` | 事件级真值（与检测隔离） |
 | `isacsim/detect/` | 参考检测器（分域规则 + 跨层关联，仅用于验证环境） |

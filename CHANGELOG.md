@@ -10,6 +10,8 @@
 - **图 v2**：节点带 `layer`，新增 `veh→gNB` 无线边与 `gNB→AMF→SMF→UPF→DN` 核心网边。
 - **真值一致性测试**：A1–A4 的 `domains` 必须能在本次运行的观测流中找到对应证据。
 - **Core 测试**：注册/会话/QoS/UPF、trace 传播、core 关闭、Uu attach、A4 truth 修复。
+- **语义级 V2X 平台**（M2）：NEF token/订阅 + PlatformLayer（IAM/Ingest/订阅/云控/审计）；输出 `core.nef`、`app.auth`、`app.ingest`、`app.subscription`、`app.control`、`app.audit`。
+- **平台测试**：Ingest、控制意图到 ControlLayer、坏 token 拒绝、NEF token/订阅。
 
 ### 修复
 
@@ -19,7 +21,7 @@
 
 ### 测试
 
-- 36 项测试通过（新增 core/truth consistency 等）。
+- 41 项测试通过（新增 core/truth consistency/platform 等）。
 
 ---
 
