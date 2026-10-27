@@ -63,6 +63,7 @@ python3 -m venv .venv
 - [实现原理与数据生成](docs/07-实现原理与数据生成.md)
 - [更新记录](CHANGELOG.md)
 - [WSL 局域网访问](docs/08-WSL局域网访问.md)
+- [通信层扩展评估](docs/09-通信层扩展评估.md)
 
 ## 重要边界
 
