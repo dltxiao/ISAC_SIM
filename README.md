@@ -64,6 +64,7 @@ python3 -m venv .venv
 - [更新记录](CHANGELOG.md)
 - [WSL 局域网访问](docs/08-WSL局域网访问.md)
 - [通信层扩展评估](docs/09-通信层扩展评估.md)
+- [通信层语义级拓展详细设计](docs/10-通信层语义级拓展详细设计.md)
 
 ## 重要边界
 
