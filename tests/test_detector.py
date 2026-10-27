@@ -44,3 +44,19 @@ def test_confirmed_object_not_flagged():
         feed(det, t, "RSU-01", [obj(9100, 150.0, -4.0)])
         feed(det, t + 0.02, "RSU-02", [obj(12, 150.0, -4.0)])
     assert not any(a.rule == "ghost_object" for a in det.alerts)
+
+
+def test_detector_does_not_read_truth():
+    """检测器只允许读观测流；静态检查它没有导入/访问 truth。"""
+    import ast
+    from pathlib import Path
+
+    src = Path("isacsim/detect/reference.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            assert "truth" not in (node.module or ""), "检测器不得导入 truth"
+        elif isinstance(node, ast.Import):
+            assert all("truth" not in a.name for a in node.names)
+    assert "ctx.truth" not in src
+    assert ".truth" not in src

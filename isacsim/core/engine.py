@@ -130,7 +130,8 @@ class Simulation:
             self.auth.tick(ctx)
             self.control.tick(ctx)
             self.task.tick(ctx)
-            self.edge.tick(ctx)
+            if self.scene.streams.graph:
+                self.edge.tick(ctx)
         finally:
             self._update_flags()
         self.t += self.scene.step_s

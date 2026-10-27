@@ -262,6 +262,7 @@
     const lat = s.latency_ms || {};
     $("statLatency").textContent = `${(lat.p95 || 0).toFixed(1)} ms`;
     $("statLatencyN").textContent = `n=${lat.n || 0} · P50 ${(lat.p50 || 0).toFixed(1)}`;
+    $("statTruth").textContent = fmtInt(s.truth_events);
 
     const box = $("campaignTypes");
     box.innerHTML = "";

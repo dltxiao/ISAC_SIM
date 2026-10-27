@@ -97,6 +97,8 @@ class AttackInstance:
         self.started = False
         self.finished = False
         self.start_at: float = -1.0
+        self.submitted_t: float | None = None
+        self.offset: float = 0.0
         self.queued = True
         self.kind = self.atype
         self._hooks: list[tuple[str, Callable]] = []

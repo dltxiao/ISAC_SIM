@@ -144,24 +144,26 @@ class SensingLayer:
             }
             final_echo = ctx.emit("sensing.radar.echo", sensor.id, f"veh:{veh.vid}",
                                   dict(echo), t=t)
-            base = final_echo if final_echo is not None else echo
-
-            track = {
-                "sensor_id": sensor.id,
-                "entity": f"veh:{veh.vid}",
-                "frame_seq": seq,
-                "target_id": tid,
-                "range_m": round(base["range_m"] + float(rng.normal(0.0, 0.05)), 3),
-                "radial_vel_mps": round(base["radial_vel_mps"] + float(rng.normal(0.0, 0.03)), 3),
-                "azimuth_deg": round(base["azimuth_deg"], 3),
-                "elevation_deg": base["elevation_deg"],
-                "rcs_dbsm": base["rcs_dbsm"],
-                "snr_db": base["snr_db"],
-                "confidence": round(min(0.99, 0.75 + snr / 200.0), 3),
-                "pos_x": round(veh.x + float(rng.normal(0.0, 0.15)), 3),
-                "pos_y": round(veh.y + float(rng.normal(0.0, 0.15)), 3),
-            }
-            ctx.emit("sensing.radar.track", sensor.id, f"veh:{veh.vid}", dict(track), t=t)
+            # 回波被攻击删除（hook 返回 None）时，点迹也不应产生；
+            # 但相机/路侧目标列表仍能看到该车，因此 objects 照常追加。
+            if final_echo is not None:
+                base = final_echo
+                track = {
+                    "sensor_id": sensor.id,
+                    "entity": f"veh:{veh.vid}",
+                    "frame_seq": seq,
+                    "target_id": tid,
+                    "range_m": round(base["range_m"] + float(rng.normal(0.0, 0.05)), 3),
+                    "radial_vel_mps": round(base["radial_vel_mps"] + float(rng.normal(0.0, 0.03)), 3),
+                    "azimuth_deg": round(base["azimuth_deg"], 3),
+                    "elevation_deg": base["elevation_deg"],
+                    "rcs_dbsm": base["rcs_dbsm"],
+                    "snr_db": base["snr_db"],
+                    "confidence": round(min(0.99, 0.75 + snr / 200.0), 3),
+                    "pos_x": round(veh.x + float(rng.normal(0.0, 0.15)), 3),
+                    "pos_y": round(veh.y + float(rng.normal(0.0, 0.15)), 3),
+                }
+                ctx.emit("sensing.radar.track", sensor.id, f"veh:{veh.vid}", dict(track), t=t)
 
             objects.append({
                 "object_id": tid,

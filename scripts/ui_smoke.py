@@ -41,7 +41,9 @@ def main(url: str = "http://127.0.0.1:8080") -> int:
         page.wait_for_timeout(4000)
         camp = page.inner_text("#statCamp")
         alerts = page.inner_text("#statAlerts")
-        print(f"[3] 注入 A1×2：跨层攻击={camp} 告警={alerts}")
+        truth = page.inner_text("#statTruth")
+        print(f"[3] 注入 A1×2：跨层攻击={camp} 告警={alerts} 真值事件={truth}")
+        assert truth not in ("0", ""), "真值事件计数未显示"
         assert camp not in ("0", ""), "攻击计数未增加"
 
         page.click("button[data-tab='stats']")

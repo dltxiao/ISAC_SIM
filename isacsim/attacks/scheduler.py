@@ -37,7 +37,8 @@ class AttackScheduler:
             cls = CAMPAIGNS.get(spec.type)
             inst = (cls(sub, self.scene, self.seed + i * 7919, aid) if cls
                     else PrimitiveAttack(sub, self.scene, self.seed + i * 7919, aid))
-            inst.start_at = (base_start if base_start is not None else -1.0) + i * 2.0
+            inst.offset = i * 2.0
+            inst.start_at = -1.0
             inst.queued = True
             self.instances.append(inst)
             created.append(inst)
@@ -49,8 +50,10 @@ class AttackScheduler:
             if inst.finished:
                 continue
             if not inst.started:
-                if inst.start_at < 0:
-                    inst.start_at = ctx.t
+                if inst.submitted_t is None:
+                    inst.submitted_t = ctx.t
+                    base = inst.spec.start if inst.spec.start is not None else ctx.t
+                    inst.start_at = base + inst.offset
                 if ctx.t + 1e-9 >= inst.start_at:
                     inst.start(ctx)
                     inst.queued = False
