@@ -12,13 +12,14 @@ from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from .. import __version__
 from .session import MANAGER, SessionError
 
 STATIC = Path(__file__).resolve().parent / "static"
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="ISAC-SIM 控制台", version="0.1.0")
+    app = FastAPI(title="ISAC-SIM 控制台", version=__version__)
     app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
     @app.get("/")

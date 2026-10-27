@@ -1,6 +1,6 @@
 """ISAC-SIM：车联网跨层攻击模拟环境。"""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 SCHEMA_VERSION = "isacsim.record/1"
 GENERATOR_VERSION = f"isacsim-{__version__}"
 

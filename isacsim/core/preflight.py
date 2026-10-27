@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .. import __version__
 from ..config import ROOT, SceneCfg
 
 
@@ -32,6 +33,7 @@ def hardware_info() -> dict[str, Any]:
     except OSError:
         load1 = load5 = load15 = 0.0
     info: dict[str, Any] = {
+        "generator_version": f"isacsim-{__version__}",
         "cpu_count": os.cpu_count() or 1,
         "loadavg": [round(load1, 2), round(load5, 2), round(load15, 2)],
         "mem_total_gib": round(total_mem / 2**30, 2),

@@ -492,7 +492,7 @@
     try {
       const hw = await api("/api/hardware");
       const sumo = hw.sumo && !hw.sumo.error ? hw.sumo.version.split(" ").slice(-1)[0] : "未安装";
-      $("hwInfo").textContent = `CPU ${hw.cpu_count} 线程 · 内存 ${hw.mem_available_gib}/${hw.mem_total_gib} GiB · 磁盘 ${hw.disk_free_gib} GiB · SUMO ${sumo} · 生成器 isacsim-0.1.0`;
+      $("hwInfo").textContent = `CPU ${hw.cpu_count} 线程 · 内存 ${hw.mem_available_gib}/${hw.mem_total_gib} GiB · 磁盘 ${hw.disk_free_gib} GiB · SUMO ${sumo} · 生成器 ${hw.generator_version || "isacsim"}`;
     } catch (e) { $("hwInfo").textContent = "硬件信息不可用"; }
 
     const source = new EventSource("/api/stream");
