@@ -62,6 +62,7 @@ python3 -m venv .venv
 - [快速上手与演示](docs/06-快速上手与演示.md)
 - [实现原理与数据生成](docs/07-实现原理与数据生成.md)
 - [更新记录](CHANGELOG.md)
+- [WSL 局域网访问](docs/08-WSL局域网访问.md)
 
 ## 重要边界
 
