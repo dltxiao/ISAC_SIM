@@ -41,6 +41,7 @@ class ReferenceDetector:
         self._bias_streak: dict[tuple[str, int], int] = defaultdict(int)
         self._resid: dict[tuple[str, int], deque] = defaultdict(lambda: deque(maxlen=6))
         self._cbr_hist: deque = deque(maxlen=30)
+        self._nas_bot: deque = deque(maxlen=400)
         self._gnss: dict[str, tuple[float, float, float]] = {}
         self._last_alert: dict[str, float] = {}
         self.static_map = {(round(o["x"], 1), round(o["y"], 1)) for o in scene.static_objects}
@@ -78,6 +79,14 @@ class ReferenceDetector:
             self._on_link(rec, p)
         elif stream == "control.command":
             self._on_control(rec, p)
+        elif stream == "core.nas":
+            self._on_core_nas(rec, p)
+        elif stream == "core.upf":
+            self._on_core_upf(rec, p)
+        elif stream == "app.ingest":
+            self._on_app_ingest(rec, p)
+        elif stream == "app.control":
+            self._on_app_control(rec, p)
 
     # ---- 规则 -----------------------------------------------------------
     def _on_objects(self, rec, p) -> None:
@@ -173,6 +182,34 @@ class ReferenceDetector:
         if ttc >= 10.0:
             self._alert("brake_without_hazard", f"veh:{p.get('dst', '')}",
                         {"ttc": ttc, "src": p.get("src")}, rec.t_wall_ns)
+
+    def _on_core_nas(self, rec, p) -> None:
+        if not p.get("bot") or p.get("msg_type") != "registration_request":
+            return
+        self._nas_bot.append(self.t)
+        cutoff = self.t - 1.0
+        while self._nas_bot and self._nas_bot[0] < cutoff:
+            self._nas_bot.popleft()
+        if len(self._nas_bot) >= 10:
+            self._alert("nas_registration_flood", "amf:AMF-01",
+                        {"bot_reg_per_s": len(self._nas_bot)}, rec.t_wall_ns)
+
+    def _on_core_upf(self, rec, p) -> None:
+        if p.get("msg_type") == "route_change" and p.get("route") != "dn:DN-01":
+            self._alert("upf_route_drift", p.get("upf_id", rec.entity),
+                        {"route": p.get("route")}, rec.t_wall_ns)
+
+    def _on_app_ingest(self, rec, p) -> None:
+        if p.get("provenance") not in (None, "dn:DN-01"):
+            self._alert("ingest_provenance_mismatch", "platform:V2X-01",
+                        {"provenance": p.get("provenance")}, rec.t_wall_ns)
+
+    def _on_app_control(self, rec, p) -> None:
+        params = p.get("params") or {}
+        n = len(p.get("vehicle_ids") or [])
+        if p.get("result") == "accept" and (n >= 3 or params.get("replayed")):
+            self._alert("cloud_control_burst", "platform:V2X-01",
+                        {"vehicles": n, "command": p.get("command")}, rec.t_wall_ns)
 
     # ------------------------------------------------------------------
     def snapshot(self) -> dict[str, Any]:

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from ...config import SceneCfg
 from ...core.ids import TraceFactory
+from ..defense import emit_defense
 from .amf import AMF
 from .ausf import AUSF
 from .bus import CoreBus
@@ -97,6 +98,26 @@ class CoreLayer:
                 edges.insert(0, {"src": f"gnb:{s.id}", "dst": self.amf.entity,
                                  "kind": "n2", "latency_ms": 2.0})
         return edges
+
+    # ------------------------------------------------------------------
+    def defense_rate_limit(self, ctx, limit_tps: float = 2000.0) -> dict:
+        old = self.amf.capacity
+        self.amf.capacity = float(limit_tps)
+        self.amf.overloaded = False
+        return emit_defense(ctx, layer="core", action="amf_rate_limit",
+                            target=self.amf.entity, params={
+                                "limit_tps": limit_tps, "old_capacity": old,
+                            })
+
+    def defense_release_session(self, ctx, ue_id: str) -> dict:
+        self.amf.release(ctx, ue_id)
+        return emit_defense(ctx, layer="core", action="smf_release_session",
+                            target=f"ue:{ue_id}", params={"ue_id": ue_id})
+
+    def defense_restore_route(self, ctx) -> dict:
+        self.upf.restore_route(ctx)
+        return emit_defense(ctx, layer="core", action="upf_route_restore",
+                            target=self.upf.entity, params={"route": "dn:DN-01"})
 
     def close(self) -> None:
         self._closed = True

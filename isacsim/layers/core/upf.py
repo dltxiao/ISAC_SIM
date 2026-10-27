@@ -15,6 +15,22 @@ class UPF(NetworkFunction):
         self.flows: dict[str, FlowRule] = {}
         self._teid_seq = 1000
         self._flow_seq = 0
+        self.route_override: str | None = None
+
+    def set_route(self, ctx, route: str, *, trace=None) -> None:
+        self.route_override = route
+        for flow in self.flows.values():
+            flow.route = route
+        ctx.emit("core.upf", self.entity, self.entity, {
+            "msg_type": "route_change",
+            "route": route,
+            "flows": len(self.flows),
+            "result": "applied",
+            "latency_ms": self.base_latency_ms,
+        }, trace=trace)
+
+    def restore_route(self, ctx, *, trace=None) -> None:
+        self.set_route(ctx, "dn:DN-01", trace=trace)
 
     def handle(self, msg, ctx) -> None:
         if msg.msg_type == "flow_install":
@@ -38,6 +54,7 @@ class UPF(NetworkFunction):
             qfi=qfi,
             five_qi=79,
             teid=self._teid_seq,
+            route=self.route_override or "dn:DN-01",
         )
         self.flows[key] = flow
         ctx.emit("core.upf", self.entity, self.entity, {

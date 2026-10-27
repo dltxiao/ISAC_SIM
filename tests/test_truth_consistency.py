@@ -31,7 +31,7 @@ def _run(atype: str, seconds: float = 8.0, seed: int = 3):
 
 
 def test_every_truth_domain_is_observable():
-    for atype in ("A1", "A2", "A3", "A4"):
+    for atype in ("A1", "A2", "A3", "A4", "A5", "A7", "A9"):
         sim, streams = _run(atype)
         assert sim.truth.events, atype
         ev = sim.truth.events[0].to_dict()

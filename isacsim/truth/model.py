@@ -17,6 +17,9 @@ OFFICIAL_TYPES = {
     "A2": "物理环境欺骗+控制指令误导",
     "A3": "跨层隐蔽攻击",
     "A4": "双因素仿冒攻击",
+    "A5": "5G-A 信令风暴",
+    "A7": "UPF/N6 流量劫持",
+    "A9": "平台越权/云控注入",
 }
 
 OFFICIAL_CHAIN = {
@@ -25,6 +28,12 @@ OFFICIAL_CHAIN = {
     "A3": ["radar.echo:range_ramp", "radar.track:bias", "control.command:inject", "telemetry:mask"],
     # A4 当前只作用于认证与 V2X；uu:ghost_attach 尚未实现，不能写进真值。
     "A4": ["auth.cert:clone", "auth.fingerprint:replay", "v2x.cam:spoof"],
+    "A5": ["core.nas:registration_flood", "core.session:establish_fail",
+           "app.ingest:age_up", "control.command:delay"],
+    "A7": ["core.upf:route_change", "v2x.cpm:forge", "app.ingest:provenance_mismatch",
+           "control.command:inject"],
+    "A9": ["app.auth:token_reuse", "app.control:burst", "control.command:batch_brake",
+           "v2x.denm:emergency"],
 }
 
 

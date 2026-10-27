@@ -16,11 +16,32 @@ class AMF(NetworkFunction):
         self.ausf = ausf
         self.ues: dict[str, UEContext] = {}
         self.handovers = 0
+        self.overloaded = False
         self._ue_seq = 0
+
+    def set_overload(self, ctx, flag: bool, *, trace=None) -> None:
+        self.overloaded = bool(flag)
+        ctx.emit("core.nas", self.entity, self.entity, {
+            "msg_type": "amf_overload",
+            "result": "enter" if flag else "clear",
+            "cause": "signaling_storm" if flag else None,
+            "latency_ms": self.base_latency_ms,
+        }, trace=trace)
 
     # ------------------------------------------------------------------
     def start_registration(self, ctx, ue_id: str, gnb_id: str) -> None:
         tr = self.factory.new_trace()
+        if self.overloaded:
+            self.rejected += 1
+            ctx.emit("core.nas", self.entity, f"ue:{ue_id}", {
+                "msg_type": "registration_reject",
+                "ue_id": ue_id,
+                "gnb_id": gnb_id,
+                "cause": "congestion",
+                "result": "reject",
+                "latency_ms": self.base_latency_ms,
+            }, trace=tr)
+            return
         ctx.emit("core.nas", f"ue:{ue_id}", self.entity, {
             "msg_type": "registration_request",
             "ue_id": ue_id,

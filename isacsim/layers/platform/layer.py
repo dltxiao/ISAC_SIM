@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from ...config import SceneCfg
+from ..defense import emit_defense
 from .audit import AuditLog
 from .dispatch import Dispatcher
 from .iam import IAM
@@ -79,7 +80,16 @@ class PlatformLayer:
         self.audit.append(ctx, actor="admin", action="token:revoke",
                           resource=token_id, result="accept" if ok else "reject",
                           trace=trace)
+        emit_defense(ctx, layer="app", action="platform_revoke_token",
+                     target=f"token:{token_id}", result="applied" if ok else "failed",
+                     trace=trace)
         return ok
+
+    def quarantine_source(self, ctx, source: str, *, trace=None) -> dict:
+        self.audit.append(ctx, actor="admin", action="source:quarantine",
+                          resource=source, result="accept", trace=trace)
+        return emit_defense(ctx, layer="app", action="platform_quarantine_source",
+                            target=source, params={"source": source}, trace=trace)
 
     def snapshot(self) -> dict:
         elapsed = max(self._last_t, 1.0)

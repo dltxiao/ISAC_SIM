@@ -345,4 +345,241 @@ class CampaignA4(AttackInstance):
         return ev
 
 
-CAMPAIGNS = {"A1": CampaignA1, "A2": CampaignA2, "A3": CampaignA3, "A4": CampaignA4}
+
+
+class CampaignA5(AttackInstance):
+    """5G-A 信令风暴：伪造 UE 注册打满 AMF，拖慢平台/远控。"""
+
+    atype = "A5"
+    label = "信令风暴→远控失控"
+
+    def __init__(self, spec: AttackSpec, scene: SceneCfg, seed: int, attack_id: str):
+        super().__init__(spec, scene, seed, attack_id)
+        self.veh_id = ""
+        self.bot_ues = 0
+        self.rate = 0.0
+        self._last = -1.0
+        self._has_control = False
+
+    def start(self, ctx) -> None:
+        super().start(ctx)
+        core = ctx.extras.get("layers", {}).get("core")
+        platform = ctx.extras.get("layers", {}).get("platform")
+        veh = pick_vehicle(ctx, self.seed, "a5")
+        if core is None or platform is None or veh is None:
+            self.finished = True
+            return
+        self.veh_id = veh.vid
+        self.bot_ues = 20 + int(round(180 * max(0.0, min(1.0, self.spec.amplitude))))
+        self.rate = 200.0 + 1800.0 * max(0.0, min(1.0, self.spec.amplitude))
+        core.amf.set_overload(ctx, True)
+        ctx.extras["platform_ingest_delay_ms"] = 200.0
+        token = platform.tenant_token_id
+        if token:
+            platform.submit_control(
+                ctx, token_id=token, vehicle_ids=[self.veh_id],
+                command="brake", params={"decel_mps2": 2.0, "duration_s": 1.0},
+                ttl_s=10.0,
+            )
+            self._has_control = True
+        ctx.stats.note("attack", f"A5 信令风暴 {self.bot_ues} UE，目标 {self.veh_id}")
+
+    def tick(self, ctx) -> None:
+        if not self.started or self.finished:
+            return
+        if ctx.t - self._last < 0.1:
+            return
+        self._last = ctx.t
+        n = max(1, min(50, int(self.rate * 0.1)))
+        for i in range(n):
+            ctx.emit("core.nas", f"ue:bot-{i % self.bot_ues:04d}", "amf:AMF-01", {
+                "msg_type": "registration_request",
+                "ue_id": f"bot-{i % self.bot_ues:04d}",
+                "gnb_id": "GNB-01",
+                "result": "reject",
+                "cause": "congestion",
+                "bot": True,
+                "latency_ms": 12.0,
+            })
+        ctx.emit("core.session", f"ue:{self.veh_id}", "smf:SMF-01", {
+            "msg_type": "pdu_session_establish_reject",
+            "ue_id": self.veh_id,
+            "result": "reject",
+            "cause": "congestion",
+            "bot": True,
+            "latency_ms": 18.0,
+        })
+
+    def stop(self, ctx) -> None:
+        core = ctx.extras.get("layers", {}).get("core")
+        if core is not None:
+            core.amf.set_overload(ctx, False)
+        ctx.extras.pop("platform_ingest_delay_ms", None)
+        super().stop(ctx)
+
+    def truth(self) -> TruthEvent:
+        ev = super().truth()
+        ev.nodes = ["amf:AMF-01", "smf:SMF-01", "platform:V2X-01",
+                    f"veh:{self.veh_id}", "attacker:A5"]
+        ev.domains = ["uu", "core", "app", "task"]
+        if self._has_control:
+            ev.domains.append("control")
+        ev.amplitude = self.spec.amplitude
+        ev.params = {"bot_ues": self.bot_ues, "rate": self.rate, "victim": self.veh_id}
+        ev.envelope = {"in_envelope": self.rate >= 1000.0,
+                       "criterion": "rate >= 1000/s"}
+        ev.expected_evidence = ["core.nas", "core.session", "app.ingest", "app.control",
+                                "control.command", "task.state"]
+        ev.stages = [
+            {"name": "注册洪泛", "t0": round(self.t0, 2), "t1": round(self.t0 + 1.0, 2)},
+            {"name": "PDU 会话失败", "t0": round(self.t0 + 1.0, 2), "t1": round(self.t0 + 3.0, 2)},
+            {"name": "远控指令老化", "t0": round(self.t0 + 3.0, 2), "t1": round(self.t1, 2)},
+        ]
+        return ev
+
+
+class CampaignA7(AttackInstance):
+    """UPF/N6 劫持：改路由并向平台注入伪造 CPM。"""
+
+    atype = "A7"
+    label = "UPF/N6 劫持→伪造 CPM"
+
+    def __init__(self, spec: AttackSpec, scene: SceneCfg, seed: int, attack_id: str):
+        super().__init__(spec, scene, seed, attack_id)
+        self.veh_id = ""
+        self._done = False
+        self._last = -1.0
+
+    def start(self, ctx) -> None:
+        super().start(ctx)
+        core = ctx.extras.get("layers", {}).get("core")
+        platform = ctx.extras.get("layers", {}).get("platform")
+        veh = pick_vehicle(ctx, self.seed, "a7")
+        if core is None or platform is None or veh is None:
+            self.finished = True
+            return
+        self.veh_id = veh.vid
+        core.upf.set_route(ctx, "dn:EVIL-01")
+        ctx.stats.note("attack", f"A7 将 UPF 路由改到 dn:EVIL-01，目标 {self.veh_id}")
+
+    def tick(self, ctx) -> None:
+        if not self.started or self.finished:
+            return
+        if not self._done:
+            self._done = True
+            self._inject(ctx)
+        if ctx.t - self._last >= 0.5:
+            self._last = ctx.t
+            self._inject(ctx)
+
+    def _inject(self, ctx) -> None:
+        platform = ctx.extras.get("layers", {}).get("platform")
+        control = ctx.extras.get("layers", {}).get("control")
+        if platform is None or control is None:
+            return
+        cpm = {
+            "msg_type": "cpm", "sender": "ATK-A7", "object_count": 1,
+            "objects": [{"object_id": 7001, "cls": "obstacle",
+                         "x": 200.0, "y": 0.0}],
+            "forged": True,
+        }
+        ctx.emit("v2x.cpm", "ATK-A7", "attacker:A7", cpm)
+        platform.ingest.ingest(
+            ctx, {"stream": "v2x.cpm", "payload": cpm},
+            token_id=platform.service_token_id or "svc-rsu",
+            tenant=platform.tenant, provenance="dn:EVIL-01",
+        )
+        control.inject_brake(ctx, self.veh_id, decel=4.0, duration=1.0)
+
+    def stop(self, ctx) -> None:
+        core = ctx.extras.get("layers", {}).get("core")
+        if core is not None:
+            core.upf.restore_route(ctx)
+        super().stop(ctx)
+
+    def truth(self) -> TruthEvent:
+        ev = super().truth()
+        ev.nodes = ["upf:UPF-01", "platform:V2X-01",
+                    f"veh:{self.veh_id}", "attacker:A7"]
+        ev.domains = ["core", "app", "v2x", "control"]
+        ev.amplitude = self.spec.amplitude
+        ev.params = {"route": "dn:EVIL-01", "victim": self.veh_id}
+        ev.envelope = {"in_envelope": True, "criterion": "route redirect"}
+        ev.expected_evidence = ["core.upf", "app.ingest", "v2x.cpm", "control.command"]
+        ev.stages = [
+            {"name": "UPF 路由改向", "t0": round(self.t0, 2), "t1": round(self.t0 + 1.0, 2)},
+            {"name": "伪造 CPM 注入平台", "t0": round(self.t0 + 1.0, 2), "t1": round(self.t1, 2)},
+        ]
+        return ev
+
+
+class CampaignA9(AttackInstance):
+    """平台越权/云控注入：复用合法租户 token 批量下发制动。"""
+
+    atype = "A9"
+    label = "平台越权/云控注入"
+
+    def __init__(self, spec: AttackSpec, scene: SceneCfg, seed: int, attack_id: str):
+        super().__init__(spec, scene, seed, attack_id)
+        self.victims: list[str] = []
+        self._last = -1.0
+        self._token = ""
+
+    def start(self, ctx) -> None:
+        super().start(ctx)
+        platform = ctx.extras.get("layers", {}).get("platform")
+        if platform is None:
+            self.finished = True
+            return
+        n = 3 + min(5, int(round(5 * max(0.0, min(1.0, self.spec.amplitude)))))
+        vehicles = [v.vid for v in sorted(ctx.vehicles.values(), key=lambda x: x.vid)
+                    if is_equipped(v.vid, self.scene.vehicles.equipped_ratio)]
+        self.victims = vehicles[:n]
+        if not self.victims:
+            self.finished = True
+            return
+        self._token = platform.tenant_token_id or ""
+        if not self._token:
+            self.finished = True
+            return
+        self._submit(ctx)
+        ctx.stats.note("attack", f"A9 云控注入 {len(self.victims)} 辆，token={self._token}")
+
+    def _submit(self, ctx) -> None:
+        platform = ctx.extras.get("layers", {}).get("platform")
+        if platform is None or not self._token:
+            return
+        platform.submit_control(
+            ctx, token_id=self._token, vehicle_ids=self.victims,
+            command="brake", params={"decel_mps2": 3.5, "duration_s": 1.2,
+                                     "replayed": True},
+            ttl_s=10.0,
+        )
+
+    def tick(self, ctx) -> None:
+        if not self.started or self.finished:
+            return
+        if ctx.t - self._last >= 0.5:
+            self._last = ctx.t
+            self._submit(ctx)
+
+    def truth(self) -> TruthEvent:
+        ev = super().truth()
+        ev.nodes = ["platform:V2X-01", "tenant:city-a", "attacker:A9",
+                    *[f"veh:{v}" for v in self.victims]]
+        ev.domains = ["app", "control", "task", "v2x"]
+        ev.amplitude = self.spec.amplitude
+        ev.params = {"token": self._token, "vehicles": self.victims}
+        ev.envelope = {"in_envelope": len(self.victims) >= 3,
+                       "criterion": "vehicles >= 3"}
+        ev.expected_evidence = ["app.auth", "app.control", "control.command",
+                                "app.audit", "v2x.denm"]
+        ev.stages = [
+            {"name": "复用租户 token", "t0": round(self.t0, 2), "t1": round(self.t0 + 1.0, 2)},
+            {"name": "批量云控制动", "t0": round(self.t0 + 1.0, 2), "t1": round(self.t1, 2)},
+        ]
+        return ev
+
+
+CAMPAIGNS = {"A1": CampaignA1, "A2": CampaignA2, "A3": CampaignA3,
+             "A4": CampaignA4, "A5": CampaignA5, "A7": CampaignA7, "A9": CampaignA9}
