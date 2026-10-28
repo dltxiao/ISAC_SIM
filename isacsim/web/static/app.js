@@ -353,11 +353,12 @@
     }
 
     const margin = 18;
-    const pw = full ? Math.min(w * 0.86, 980) : Math.min(Math.max(420, w * 0.44), 650);
-    const ph = full ? Math.min(h * 0.78, 620) : Math.min(Math.max(300, h * 0.50), 430);
+    // 叠加视图：右下角较小面板，避免遮挡右侧道路；核心网视图：居中大图
+    const pw = full ? Math.min(w * 0.86, 980) : Math.min(Math.max(430, w * 0.32), 520);
+    const ph = full ? Math.min(h * 0.78, 620) : Math.min(Math.max(270, h * 0.32), 330);
     const px = full ? (w - pw) / 2 : w - pw - margin;
-    const py = full ? (h - ph) / 2 : margin;
-    const scale = full ? 1.18 : 1.0;
+    const py = full ? (h - ph) / 2 : h - ph - margin;
+    const scale = full ? 1.18 : 0.90;
 
     ctx.save();
     ctx.beginPath();
@@ -417,6 +418,7 @@
     }
     canvas.dataset.coreNodes = String(coreBoxes.length);
     canvas.dataset.coreStatuses = coreBoxes.map((b) => `${b.id}:${b.status}`).join(",");
+    canvas.dataset.corePanel = `${Math.round(px)},${Math.round(py)},${Math.round(pw)},${Math.round(ph)}`;
     canvas.dataset.viewMode = viewMode;
     ctx.restore();
   }
