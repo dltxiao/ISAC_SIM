@@ -21,6 +21,7 @@
 - **Web 视图**（M5）：网络/平台 tab、核心网/平台摘要、防御动作表、攻击链列表；新增 `/api/core`、`/api/platform`、`/api/chain`、`/api/defense`。
 - **NIDD 导出**（M5）：D4（核心网）、D5（平台）、`defense.jsonl`、`chain.json`。
 - **v0.3.0 验收**（M6）：500 攻击 + 500 正常（A1–A10 各 50，15 s，18 进程）识别率 **100%**、误检率 **0.20%**、P99 **0.214 ms**、链级节点召回 **55.28%**；批量 **198.4 s**；60 s 场景 **16.8 s**；报告见 [docs/11](docs/11-v0.3.0验收报告.md)。
+- **核心网状态可视化**：左侧 Canvas `路网/叠加/核心网` 切换，节点按 green/orange/red 着色；`layers/health.py` 统一阈值；A5/A6/A7/A8/A9/A10 状态已实测。
 
 ### 修复
 
@@ -30,7 +31,7 @@
 
 ### 测试
 
-- 51 项测试通过（新增 core/truth consistency/platform/cloud attacks/chain/API 等）。
+- 58 项测试通过（新增 core/truth consistency/platform/cloud attacks/chain/API/health 等）。
 
 ---
 
