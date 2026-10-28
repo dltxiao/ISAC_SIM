@@ -61,8 +61,10 @@ python3 -m venv .venv
 - [Web 控制台使用说明](docs/05-Web控制台使用说明.md)
 - [快速上手与演示](docs/06-快速上手与演示.md)
 - [实现原理与数据生成](docs/07-实现原理与数据生成.md)
-- [更新记录](CHANGELOG.md)
 - [WSL 局域网访问](docs/08-WSL局域网访问.md)
+- [A1 攻击实现解析](docs/09-A1攻击实现解析.md)
+- [运行追踪与单步设计](docs/trace/README.md)
+- [更新记录](CHANGELOG.md)
 
 ## 重要边界
 
