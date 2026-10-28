@@ -51,6 +51,7 @@ class SimContext:
     sumo: Any = None
     truth: Any = None
     detector: Any = None
+    trace: Any = None
     extras: dict[str, Any] = field(default_factory=dict)
 
     def ts_ns(self, t: float | None = None) -> int:
@@ -68,4 +69,6 @@ class SimContext:
         self.sink.emit(rec)
         if self.detector is not None:
             self.detector.on_record(rec)
+        if self.trace is not None:
+            self.trace.on_record(rec)
         return payload

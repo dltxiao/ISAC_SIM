@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>ISAC-SIM · 运行追踪</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<link rel="stylesheet" href="/static/trace.css"/>
+</head>
+<body class="trace-body">
+<header class="trace-top">
+  <div class="trace-brand">
+    <span class="trace-logo">TRACE</span>
+    <div>
+      <h1>运行追踪 / Watch</h1>
+      <p class="muted" id="runInfo">等待会话…</p>
+    </div>
+  </div>
+
+  <div class="trace-status">
+    <span id="stateBadge" class="badge idle">未启动</span>
+    <div class="metric"><span>仿真时间</span><b id="simTime">0.0 s</b></div>
+    <div class="metric"><span>tick</span><b id="tickNo">0</b></div>
+    <div class="metric"><span>cursor</span><b id="cursorNo">0</b></div>
+    <div class="metric"><span>模式</span><b id="modeLabel">live</b></div>
+  </div>
+
+  <div class="trace-actions">
+    <button id="btnPause">冻结</button>
+    <button id="btnResume">继续</button>
+    <button id="btnStep" class="primary">下一步</button>
+    <button id="btnTick">tick 步</button>
+    <button id="btnInjectA1">注入 A1</button>
+    <a class="backlink" href="/">主控制台</a>
+  </div>
+</header>
+
+<main class="trace-layout">
+  <aside class="trace-left">
+    <div class="left-head">
+      <span>WATCH</span>
+      <span class="muted small" id="watchCount">0</span>
+    </div>
+    <input id="searchInput" class="trace-search" placeholder="搜索 target / 字段…"/>
+    <div id="watchTree" class="watch-tree">
+      <p class="muted small">等待数据…</p>
+    </div>
+  </aside>
+
+  <section class="trace-center">
+    <div id="stepBanner" class="step-banner">
+      <div class="step-title">连续运行</div>
+      <div class="step-sub muted">注入攻击后，点“下一步”在检查点暂停。</div>
+    </div>
+    <div id="cards" class="cards">
+      <p class="muted">等待仿真数据…</p>
+    </div>
+  </section>
+
+  <aside class="trace-right">
+    <div class="right-head">
+      <span>TRACE</span>
+      <span class="muted small" id="eventCount">0</span>
+    </div>
+    <div id="traceEvents" class="trace-events">
+      <p class="muted small">暂无事件</p>
+    </div>
+    <div class="xref-head">DETAIL</div>
+    <pre id="eventDetail" class="event-detail">选中一条事件查看原始数据。</pre>
+  </aside>
+</main>
+
+<footer class="trace-bottom">
+  <div class="timeline-wrap">
+    <div class="timeline-label muted small">时间轴</div>
+    <div id="timeline" class="timeline">
+      <div class="timeline-fill" id="timelineFill"></div>
+      <div class="timeline-marks" id="timelineMarks"></div>
+    </div>
+  </div>
+  <div class="bottom-hint muted small">
+    <span>空格：下一步</span>
+    <span>F：冻结/继续</span>
+    <span>点击行查看原始 JSON</span>
+    <span id="connInfo">连接中…</span>
+  </div>
+</footer>
+
+<div id="toast" class="toast"></div>
+<script src="/static/trace.js"></script>
+</body>
+</html>

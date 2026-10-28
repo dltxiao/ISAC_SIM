@@ -37,6 +37,15 @@ python3 -m venv .venv
 .venv/bin/python -m isacsim eval --runs out/ds
 ```
 
+## 运行追踪页（v1）
+
+Web 控制台启动后，打开 **`http://127.0.0.1:8080/trace`**（或点主控制台顶部的“运行追踪”）：
+
+- 左侧 watch 树、中间实时卡片、右侧 trace 事件、底部时间轴；
+- 不注入攻击时展示 3 RSU + gNB 目标列表、车队、PC5、检测器；
+- 点“冻结” → “注入 A1” → “下一步”，按检查点观察注入、TTC、CBR、减速、告警；
+- 第一版范围与已知限制见 [运行追踪 v1 实现说明](docs/trace/10-v1实现说明.md)。
+
 ## 组成
 
 | 模块 | 说明 |
@@ -50,6 +59,7 @@ python3 -m venv .venv
 | `isacsim/batch/` | 多进程数据集生成 |
 | `isacsim/io/` | 原生 JSONL/Parquet、pcapng、5G-A-NIDD 适配器 |
 | `isacsim/web/` | FastAPI + SSE + Canvas 控制台 |
+| `isacsim/trace/` | Watch/Trace 数据层、检查点单步、运行追踪页后端 |
 
 ## 文档
 
@@ -64,6 +74,7 @@ python3 -m venv .venv
 - [WSL 局域网访问](docs/08-WSL局域网访问.md)
 - [A1 攻击实现解析](docs/09-A1攻击实现解析.md)
 - [运行追踪与单步设计](docs/trace/README.md)
+- [运行追踪 v1 实现说明](docs/trace/10-v1实现说明.md)
 - [更新记录](CHANGELOG.md)
 
 ## 重要边界

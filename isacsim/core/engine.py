@@ -20,7 +20,8 @@ class Simulation:
     def __init__(self, scene: SceneCfg, *, run_id: str | None = None,
                  out_dir: str | Path | None = None, sink=None,
                  stats: RunStats | None = None, detector=None,
-                 realtime: bool = False, speed: float = 1.0) -> None:
+                 realtime: bool = False, speed: float = 1.0,
+                 trace: bool = False) -> None:
         self.scene = scene
         self.run_id = run_id or f"{scene.name}-{scene.seed}-{int(time.time())}"
         self.out_dir = Path(out_dir) if out_dir else None
@@ -47,6 +48,10 @@ class Simulation:
 
         self._stop = threading.Event()
         self._paused = threading.Event()
+        self._paused_ack = threading.Event()
+        self._step_budget: int | None = None
+        self._step_mode: str | None = None
+        self._pause_reason: str | None = None
         self.state = "idle"
         self.error: str | None = None
         self._started_wall = 0.0
@@ -69,6 +74,11 @@ class Simulation:
         self.task = TaskLayer(scene)
         self.edge = EdgeLayer(scene)
         self.scheduler = AttackScheduler(scene, self.stats, self.truth, scene.seed, self.run_id)
+
+        self.trace = None
+        if trace:
+            from ..trace.service import TraceService
+            self.trace = TraceService(self)
 
     # ------------------------------------------------------------------
     def start(self) -> None:
@@ -119,11 +129,14 @@ class Simulation:
             run_id=self.run_id, scene=self.scene, sink=self.sink,
             stats=self.stats, hooks=self.hooks, vehicles=vehicles,
             sumo=self.sumo, truth=self.truth, detector=self.detector,
+            trace=self.trace,
         )
         ctx.extras["layers"] = {"sensing": self.sensing, "control": self.control,
                                 "v2x": self.v2x}
         try:
             self.scheduler.tick(ctx)
+            if self.trace is not None:
+                self.trace.after_scheduler(ctx)
             self.sensing.tick(ctx)
             self.v2x.tick(ctx)
             self.uu.tick(ctx)
@@ -138,6 +151,8 @@ class Simulation:
         self.tick += 1
         self.stats.sim_time = self.t
         self.stats.vehicles = len(vehicles)
+        if self.trace is not None:
+            self.trace.after_tick(ctx)
         return True
 
     def _update_flags(self) -> None:
@@ -157,12 +172,19 @@ class Simulation:
         try:
             while not self._stop.is_set():
                 if self._paused.is_set():
+                    self._paused_ack.set()
                     if self.realtime:
                         wall0 = time.monotonic() - self.t / max(0.05, self.speed)
                     time.sleep(0.02)
                     continue
                 if not self.step_once():
                     break
+                if self._step_budget is not None:
+                    self._step_budget -= 1
+                    if self._step_budget <= 0:
+                        self._step_budget = None
+                        self._step_mode = None
+                        self.pause("step:tick")
                 if self.realtime:
                     target = wall0 + self.t / max(0.05, self.speed)
                     delay = target - time.monotonic()
@@ -177,15 +199,52 @@ class Simulation:
             self.stop()
 
     # ------------------------------------------------------------------
-    def pause(self) -> None:
+    def pause(self, reason: str | None = None) -> None:
+        self._pause_reason = reason or "manual"
+        self._paused_ack.clear()
         self._paused.set()
         self.state = "paused"
         self.stats.state = "paused"
 
     def resume(self) -> None:
+        self._step_budget = None
+        self._step_mode = None
+        self._pause_reason = None
+        self._paused_ack.clear()
         self._paused.clear()
         self.state = "running"
         self.stats.state = "running"
+
+    def step(self, mode: str = "checkpoint", count: int = 1,
+             timeout: float = 5.0) -> dict[str, Any]:
+        """从暂停点推进一步；checkpoint 模式由 TraceService 决定停点。"""
+        if self.sumo is None:
+            raise RuntimeError("仿真尚未启动")
+        if self.state == "running":
+            self.pause("step:prepare")
+        # 等仿真线程真正停在安全边界；最多等一个 tick 量级
+        self._paused_ack.wait(0.5)
+        prev_step = self.trace.last_step if self.trace is not None else None
+        if self.trace is not None:
+            self.trace.begin_step(mode)
+        self._step_mode = mode
+        self._step_budget = max(1, int(count)) if mode == "tick" else None
+        self._paused.clear()
+        self.state = "running"
+        self.stats.state = "running"
+        deadline = time.monotonic() + float(timeout)
+        while time.monotonic() < deadline:
+            if self.state in ("stopped", "error"):
+                break
+            if self.state == "paused":
+                if mode == "tick":
+                    break
+                if self.trace is None or self.trace.last_step is not prev_step:
+                    break
+            time.sleep(0.02)
+        snap = self.snapshot()
+        snap["step"] = self.trace.last_step if self.trace is not None else None
+        return snap
 
     def request_stop(self) -> None:
         self._stop.set()
@@ -247,6 +306,15 @@ class Simulation:
         })
         if self.detector is not None:
             snap["detector"] = self.detector.snapshot()
+        if self.trace is not None:
+            step = self.trace.last_step or {}
+            snap["trace"] = {"enabled": True, "cursor": self.trace.seq,
+                             "step_mode": self._step_mode,
+                             "pause_reason": self._pause_reason,
+                             "step": ({"step_id": step.get("step_id"),
+                                       "title": step.get("title"),
+                                       "reason": step.get("reason")}
+                                      if step else None)}
         if self.error:
             snap["error"] = self.error
         return snap

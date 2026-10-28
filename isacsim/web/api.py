@@ -26,6 +26,10 @@ def create_app() -> FastAPI:
     def index() -> FileResponse:
         return FileResponse(STATIC / "index.html")
 
+    @app.get("/trace")
+    def trace_page() -> FileResponse:
+        return FileResponse(STATIC / "trace.html")
+
     @app.get("/api/hardware")
     def hardware() -> dict[str, Any]:
         return MANAGER.hardware()
@@ -33,6 +37,61 @@ def create_app() -> FastAPI:
     @app.get("/api/scenes")
     def scenes() -> list[dict[str, Any]]:
         return [{"id": "arterial", "name": "城市干道（400 m，3 RSU + 1 gNB）"}]
+
+    @app.get("/api/trace/capabilities")
+    def trace_capabilities() -> dict[str, Any]:
+        state = MANAGER.trace_state()
+        return {
+            "schema": "isacsim.trace/1",
+            "enabled": bool(state.get("enabled")),
+            "modes": ["live", "step_tick", "step_checkpoint"],
+            "can_control": bool(state.get("enabled")),
+            "session": {"state": state.get("state"),
+                        "t": state.get("t"), "tick": state.get("tick"),
+                        "cursor": state.get("cursor")},
+            "profiles": ["A1", "default"],
+        }
+
+    @app.get("/api/trace/state")
+    def trace_state() -> dict[str, Any]:
+        return MANAGER.trace_state()
+
+    @app.get("/api/trace/targets")
+    def trace_targets() -> list[dict[str, Any]]:
+        return MANAGER.trace_targets()
+
+    @app.get("/api/trace/events")
+    def trace_events(after: int = 0, limit: int = 200) -> list[dict[str, Any]]:
+        return MANAGER.trace_events(after, min(1000, max(1, limit)))
+
+    @app.post("/api/trace/step")
+    def trace_step(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+        try:
+            mode = str(body.get("mode", "checkpoint"))
+            if mode not in ("checkpoint", "tick"):
+                raise HTTPException(400, "mode 必须是 checkpoint 或 tick")
+            count = int(body.get("count", 1))
+            snap = MANAGER.trace_step(mode=mode, count=count)
+            return {"snapshot": snap, "trace": MANAGER.trace_state()}
+        except SessionError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.get("/api/trace/stream")
+    async def trace_stream() -> StreamingResponse:
+        async def gen():
+            while True:
+                try:
+                    payload = MANAGER.trace_state()
+                    cursor = payload.get("cursor", 0)
+                    data = json.dumps(payload, ensure_ascii=False)
+                    yield f"id: {cursor}\nevent: trace\ndata: {data}\n\n"
+                except Exception as exc:  # noqa: BLE001
+                    yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
+                await asyncio.sleep(0.1)
+
+        return StreamingResponse(gen(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache",
+                                          "X-Accel-Buffering": "no"})
 
     @app.get("/api/state")
     def state() -> dict[str, Any]:

@@ -41,7 +41,7 @@ class SessionManager:
             out = ROOT / "out" / "web" / run_id
             detector = ReferenceDetector(scn)
             sim = Simulation(scn, run_id=run_id, out_dir=out, detector=detector,
-                             realtime=True, speed=speed)
+                             realtime=True, speed=speed, trace=True)
             self.sim = sim
             self.run_dir = out
             self.params = {"seed": seed, "speed": speed, "duration": duration,
@@ -114,6 +114,34 @@ class SessionManager:
         if self.thread is not None and self.thread.is_alive() and snap["state"] == "idle":
             snap["state"] = "starting"
         return snap
+
+    def trace_state(self) -> dict[str, Any]:
+        if self.sim is None or self.sim.trace is None:
+            return {"schema": "isacsim.trace/1", "enabled": False,
+                    "targets": [], "frames": {}, "events": [], "steps": [],
+                    "last_step": None, "cursor": 0, "state": "idle",
+                    "t": 0.0, "tick": 0}
+        return self.sim.trace.snapshot()
+
+    def trace_targets(self) -> list[dict[str, Any]]:
+        if self.sim is None or self.sim.trace is None:
+            return []
+        return self.sim.trace.target_list()
+
+    def trace_events(self, after: int = 0, limit: int = 200) -> list[dict[str, Any]]:
+        if self.sim is None or self.sim.trace is None:
+            return []
+        return self.sim.trace.events_after(after, limit)
+
+    def trace_step(self, mode: str = "checkpoint", count: int = 1) -> dict[str, Any]:
+        if self.sim is None or self.sim.trace is None:
+            raise SessionError("追踪未启用")
+        if self.sim.state not in ("running", "paused"):
+            raise SessionError("仿真未运行或已停止")
+        try:
+            return self.sim.step(mode=mode, count=count, timeout=5.0)
+        except RuntimeError as exc:
+            raise SessionError(str(exc)) from exc
 
     def net(self) -> dict[str, Any] | None:
         return self.sim.net_json() if self.sim is not None else None

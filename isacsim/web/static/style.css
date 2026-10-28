@@ -61,6 +61,12 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 .badge.starting { color: #03203a; background: var(--accent); border-color: transparent; }
 
 .controls { display: flex; align-items: center; gap: 8px; }
+.trace-link {
+  padding: 7px 11px; border-radius: 8px; text-decoration: none;
+  border: 1px solid #2d4a66; background: #142333; color: #8fc7ff;
+  font-size: 13px;
+}
+.trace-link:hover { background: #1b3045; border-color: #3b6b95; color: #d6ecff; }
 
 button {
   appearance: none; cursor: pointer;

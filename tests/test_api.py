@@ -30,3 +30,21 @@ def test_unknown_attack_type(client):
 
 def test_net_endpoint(client):
     assert client.get("/api/net").status_code == 200
+
+
+def test_trace_page_and_capabilities(client):
+    assert client.get("/trace").status_code == 200
+    cap = client.get("/api/trace/capabilities").json()
+    assert cap["schema"] == "isacsim.trace/1"
+    assert "step_checkpoint" in cap["modes"]
+
+
+def test_trace_state_without_session(client):
+    state = client.get("/api/trace/state").json()
+    assert state["schema"] == "isacsim.trace/1"
+    assert state["targets"] == []
+
+
+def test_trace_step_without_session_conflict(client):
+    r = client.post("/api/trace/step", json={"mode": "checkpoint"})
+    assert r.status_code == 409
