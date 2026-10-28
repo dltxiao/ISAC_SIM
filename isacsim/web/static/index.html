@@ -53,6 +53,17 @@
       <span><i class="dot gnb"></i>gNB</span>
       <span><i class="dot ghost"></i>幽灵目标</span>
     </div>
+    <div class="viewswitch" id="viewSwitch">
+      <button data-view="road">路网</button>
+      <button data-view="overlay" class="active">叠加</button>
+      <button data-view="core">核心网</button>
+    </div>
+    <div class="core-legend" id="coreLegend">
+      <span><i class="dot healthy"></i>健康</span>
+      <span><i class="dot busy"></i>繁忙</span>
+      <span><i class="dot congested"></i>拥塞/异常</span>
+      <span><i class="dot unknown"></i>未知</span>
+    </div>
     <div class="hint" id="mapHint">启动仿真后显示实时车辆与攻击叠加</div>
     <div class="tooltip" id="tooltip"></div>
   </section>

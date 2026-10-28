@@ -13,6 +13,29 @@
   let selected = null;
   let hover = null;
   let logKeys = new Set();
+  let viewMode = "overlay";
+  let coreBoxes = [];
+  let coreHover = null;
+
+  const CORE_LABELS = {
+    gnb: "gNB", amf: "AMF", smf: "SMF", upf: "UPF", nef: "NEF",
+    udm: "UDM", ausf: "AUSF", dn: "DN", platform: "V2X 平台",
+  };
+  const HEALTH_COLORS = {
+    green: "#35c48a", orange: "#f0a93b", red: "#e05a5a",
+    unknown: "#7d8fa3", disabled: "#4b5a6a",
+  };
+  const CORE_EDGES = [
+    ["gnb", "amf", "N2"], ["amf", "smf", "N11"], ["smf", "upf", "N4"],
+    ["upf", "dn", "N6"], ["dn", "platform", "API"],
+    ["amf", "nef", "SBI"], ["amf", "ausf", "N12"],
+    ["ausf", "udm", "N13"], ["nef", "udm", "N8"],
+  ];
+  const CORE_SLOTS = {
+    amf: [0.12, 0.28], smf: [0.33, 0.28], upf: [0.54, 0.28],
+    dn: [0.73, 0.28], platform: [0.87, 0.52],
+    nef: [0.20, 0.70], udm: [0.43, 0.70], ausf: [0.62, 0.70],
+  };
 
   const CAMPAIGN_NAMES = {
     A1: "感知篡改→通信拥塞",
@@ -85,11 +108,26 @@
     const w = canvas.clientWidth, h = canvas.clientHeight;
     ctx.clearRect(0, 0, w, h);
     drawBackground();
-    if (!net) { drawHint("等待路网数据…"); return; }
+    if (viewMode === "core") {
+      drawCoreOverlay(true);
+      return;
+    }
+    if (!net) {
+      if (viewMode === "overlay") drawCoreOverlay(false);
+      else drawHint("等待路网数据…");
+      return;
+    }
     drawLanes();
     drawSensors();
     if (state) drawVehicles();
     if (selected) drawSelection();
+    if (viewMode === "overlay") {
+      ctx.fillStyle = "rgba(6,12,18,.48)";
+      ctx.fillRect(0, 0, w, h);
+      drawCoreOverlay(false);
+    } else {
+      coreBoxes = [];
+    }
   }
 
   function drawBackground() {
@@ -222,6 +260,165 @@
     ctx.textAlign = "center";
     ctx.fillText(text, w / 2, h / 2);
     ctx.textAlign = "left";
+  }
+
+
+  // --------------------------------------------------------- core overlay
+  function healthOf(node) {
+    return (node && node.health) || { status: "unknown", reasons: [], metrics: {} };
+  }
+
+  function healthStatus(node) {
+    return healthOf(node).status || "unknown";
+  }
+
+  function statusColor(node) {
+    return HEALTH_COLORS[healthStatus(node)] || HEALTH_COLORS.unknown;
+  }
+
+  function nodeMetric(node) {
+    const h = healthOf(node);
+    const m = h.metrics || {};
+    if (h.status === "red" || h.status === "orange") {
+      return (h.reasons || []).slice(0, 1).join("");
+    }
+    return `L ${Math.round((m.load || 0) * 100)}%`;
+  }
+
+  function drawCoreNode(x, y, id, node, scale) {
+    const w = (id === "gnb" ? 66 : 78) * scale;
+    const h = (id === "gnb" ? 36 : 42) * scale;
+    const status = healthStatus(node);
+    const color = statusColor(node);
+    const now = performance.now();
+
+    if (status === "red") {
+      const pulse = 3 + 4 * (0.5 + 0.5 * Math.sin(now / 240));
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(w, h) * 0.62 + pulse, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(224,90,90,.35)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else if (status === "orange") {
+      const pulse = 1 + 1.5 * (0.5 + 0.5 * Math.sin(now / 600));
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(w, h) * 0.60 + pulse, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(240,169,59,.25)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    ctx.beginPath();
+    ctx.roundRect(x - w / 2, y - h / 2, w, h, 7 * scale);
+    ctx.fillStyle = "rgba(16,25,36,.96)";
+    ctx.fill();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = status === "red" ? 2 : 1.4;
+    ctx.stroke();
+
+    ctx.fillStyle = "#d7e0ea";
+    ctx.font = `${11 * scale}px sans-serif`;
+    ctx.textAlign = "center";
+    ctx.fillText(CORE_LABELS[id] || id, x, y - 4 * scale);
+    ctx.fillStyle = color;
+    ctx.font = `${9 * scale}px sans-serif`;
+    ctx.fillText(nodeMetric(node), x, y + 10 * scale);
+    ctx.textAlign = "left";
+
+    const badge = status === "green" ? "✓" : status === "orange" ? "!" : status === "red" ? "×" : "?";
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x + w / 2 - 7 * scale, y - h / 2 + 7 * scale, 5 * scale, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#071018";
+    ctx.font = `bold ${8 * scale}px sans-serif`;
+    ctx.textAlign = "center";
+    ctx.fillText(badge, x + w / 2 - 7 * scale, y - h / 2 + 9 * scale);
+    ctx.textAlign = "left";
+
+    coreBoxes.push({ id, x, y, w, h, node, status });
+  }
+
+  function drawCoreOverlay(full) {
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    coreBoxes = [];
+    if (!state) {
+      drawHint("启动仿真后显示 5G 核心网节点状态");
+      return;
+    }
+    const core = state.core;
+    if (!core) {
+      drawHint("核心网未启用或后端版本过旧");
+      return;
+    }
+
+    const margin = 18;
+    const pw = full ? Math.min(w * 0.86, 980) : Math.min(Math.max(420, w * 0.44), 650);
+    const ph = full ? Math.min(h * 0.78, 620) : Math.min(Math.max(300, h * 0.50), 430);
+    const px = full ? (w - pw) / 2 : w - pw - margin;
+    const py = full ? (h - ph) / 2 : margin;
+    const scale = full ? 1.18 : 1.0;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(px, py, pw, ph, 12);
+    ctx.fillStyle = "rgba(10,17,25,.93)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(64,88,112,.85)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.fillStyle = "#d7e0ea";
+    ctx.font = "bold 12px sans-serif";
+    ctx.fillText("5G-A Core / V2X Platform", px + 14, py + 21);
+    ctx.fillStyle = "#7d8fa3";
+    ctx.font = "10px sans-serif";
+    ctx.fillText("实时健康状态 · 绿色健康 / 橙色繁忙 / 红色拥塞或异常", px + 14, py + 37);
+
+    const nodePos = {};
+    for (const [id, rel] of Object.entries(CORE_SLOTS)) {
+      nodePos[id] = [px + pw * rel[0], py + ph * rel[1]];
+    }
+    // gNB：叠加视图下锚定在地图真实位置；核心网视图下放进面板
+    const gnbInfo = (state.infrastructure || []).find((s) => s.kind === "gnb");
+    if (!full && gnbInfo && net && transform.scale > 0) {
+      nodePos.gnb = toScreen(gnbInfo.x, gnbInfo.y);
+    } else {
+      nodePos.gnb = [px + pw * 0.06, py + ph * 0.88];
+    }
+
+    const nodes = {
+      gnb: core.gnb, amf: core.amf, smf: core.smf, upf: core.upf,
+      nef: core.nef, udm: core.udm, ausf: core.ausf, dn: core.dn,
+      platform: state.platform,
+    };
+
+    for (const [src, dst, label] of CORE_EDGES) {
+      if (!nodePos[src] || !nodePos[dst]) continue;
+      const [x1, y1] = nodePos[src], [x2, y2] = nodePos[dst];
+      const st1 = healthStatus(nodes[src]), st2 = healthStatus(nodes[dst]);
+      const bad = [st1, st2].includes("red") ? "red" : ([st1, st2].includes("orange") ? "orange" : "normal");
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.strokeStyle = bad === "red" ? "rgba(224,90,90,.75)" : bad === "orange" ? "rgba(240,169,59,.55)" : "rgba(74,96,120,.65)";
+      ctx.lineWidth = bad === "red" ? 1.8 : 1.1;
+      if (bad === "red") ctx.setLineDash([4, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(125,143,163,.75)";
+      ctx.font = "9px sans-serif";
+      ctx.fillText(label, (x1 + x2) / 2 + 3, (y1 + y2) / 2 - 3);
+    }
+
+    for (const id of ["gnb", "amf", "smf", "upf", "nef", "udm", "ausf", "dn", "platform"]) {
+      const [x, y] = nodePos[id];
+      drawCoreNode(x, y, id, nodes[id], scale);
+    }
+    canvas.dataset.coreNodes = String(coreBoxes.length);
+    canvas.dataset.coreStatuses = coreBoxes.map((b) => `${b.id}:${b.status}`).join(",");
+    canvas.dataset.viewMode = viewMode;
+    ctx.restore();
   }
 
   // -------------------------------------------------------------- render
@@ -439,6 +636,7 @@
       netRequested = true;
       api("/api/net").then((data) => {
         if (data && data.lanes && data.lanes.length) { net = data; computeTransform(); draw(); }
+        else { netRequested = false; }
       }).catch(() => { netRequested = false; });
     }
     updateHeader(s);
@@ -498,6 +696,18 @@
     }
   };
 
+  function syncViewSwitch() {
+    document.querySelectorAll("#viewSwitch button").forEach((b) => {
+      b.classList.toggle("active", b.dataset.view === viewMode);
+    });
+    $("coreLegend").style.display = viewMode === "road" ? "none" : "flex";
+    draw();
+  }
+
+  document.querySelectorAll("#viewSwitch button").forEach((btn) => {
+    btn.onclick = () => { viewMode = btn.dataset.view; coreHover = null; syncViewSwitch(); };
+  });
+
   document.querySelectorAll(".tabs button").forEach((btn) => {
     btn.onclick = () => {
       document.querySelectorAll(".tabs button").forEach((b) => b.classList.remove("active"));
@@ -526,6 +736,16 @@
   $("btnClearLog").onclick = () => { $("logList").innerHTML = ""; logKeys = new Set(); };
 
   // ------------------------------------------------------------ pointer
+  function pickCore(ev) {
+    if (viewMode === "road" || !coreBoxes.length) return null;
+    const rect = canvas.getBoundingClientRect();
+    const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+    for (const b of coreBoxes) {
+      if (Math.abs(mx - b.x) <= b.w / 2 + 3 && Math.abs(my - b.y) <= b.h / 2 + 3) return b;
+    }
+    return null;
+  }
+
   function pickVehicle(ev) {
     if (!state) return null;
     const rect = canvas.getBoundingClientRect();
@@ -540,9 +760,24 @@
   }
 
   canvas.addEventListener("mousemove", (ev) => {
+    const tip = $("tooltip");
+    const c = pickCore(ev);
+    if (c) {
+      coreHover = c;
+      const rect = canvas.getBoundingClientRect();
+      const h = healthOf(c.node);
+      tip.style.display = "block";
+      tip.style.left = `${ev.clientX - rect.left + 14}px`;
+      tip.style.top = `${ev.clientY - rect.top + 12}px`;
+      tip.innerHTML = `<b>${c.id}</b><br>状态：<span style="color:${statusColor(c.node)}">${h.status}</span><br>
+        原因：${(h.reasons || []).join("、") || "—"}<br>
+        负载：${Math.round((((h.metrics || {}).load) || 0) * 100)}%`;
+      canvas.style.cursor = "help";
+      return;
+    }
+    coreHover = null;
     const v = pickVehicle(ev);
     hover = v;
-    const tip = $("tooltip");
     if (!v) { tip.style.display = "none"; canvas.style.cursor = "crosshair"; return; }
     const rect = canvas.getBoundingClientRect();
     tip.style.display = "block";
@@ -553,8 +788,17 @@
     canvas.style.cursor = "pointer";
   });
 
-  canvas.addEventListener("mouseleave", () => { $("tooltip").style.display = "none"; });
+  canvas.addEventListener("mouseleave", () => {
+    $("tooltip").style.display = "none";
+    coreHover = null;
+  });
   canvas.addEventListener("click", (ev) => {
+    const c = pickCore(ev);
+    if (c) {
+      const tab = document.querySelector("button[data-tab='infra']");
+      if (tab) tab.click();
+      return;
+    }
     const v = pickVehicle(ev);
     selected = v ? v.id : null;
     draw();
@@ -565,6 +809,7 @@
 
   async function init() {
     resize();
+    syncViewSwitch();
     try {
       const hw = await api("/api/hardware");
       const sumo = hw.sumo && !hw.sumo.error ? hw.sumo.version.split(" ").slice(-1)[0] : "未安装";

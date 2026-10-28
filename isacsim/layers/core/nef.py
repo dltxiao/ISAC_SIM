@@ -19,6 +19,8 @@ class NEF(NetworkFunction):
         self.subscriptions: dict[str, NefSubscription] = {}
         self._token_seq = 0
         self._sub_seq = 0
+        self.unsubscribed = 0
+        self.revoked = 0
 
     # ------------------------------------------------------------------
     def issue_token(self, ctx, *, subject: str, tenant: str,
@@ -109,6 +111,7 @@ class NEF(NetworkFunction):
             }, trace=trace)
             return False
         sub.state = "REVOKED"
+        self.unsubscribed += 1
         ctx.emit("core.nef", self.entity, self.entity, {
             "msg_type": "api_unsubscribe",
             "subscription_id": sub_id,
@@ -125,6 +128,7 @@ class NEF(NetworkFunction):
         if token is None:
             return False
         token.revoked = True
+        self.revoked += 1
         ctx.emit("core.nef", self.entity, self.entity, {
             "msg_type": "token_revoke",
             "token_id": token_id,
@@ -143,5 +147,7 @@ class NEF(NetworkFunction):
             "subscriptions": len(self.subscriptions),
             "active_subscriptions": sum(1 for s in self.subscriptions.values()
                                         if s.state == "ACTIVE"),
+            "unsubscribed": self.unsubscribed,
+            "revoked": self.revoked,
         })
         return out

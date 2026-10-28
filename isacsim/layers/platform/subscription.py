@@ -8,6 +8,7 @@ class SubscriptionManager:
     def __init__(self) -> None:
         self.subs: dict[str, Subscription] = {}
         self._seq = 0
+        self.revoked = 0
 
     def create(self, ctx, *, tenant: str, event_types: list[str],
                callback: str, trace=None) -> Subscription:
@@ -36,6 +37,7 @@ class SubscriptionManager:
         if sub is None:
             return False
         sub.state = "REVOKED"
+        self.revoked += 1
         ctx.emit("app.subscription", f"tenant:{sub.tenant}", "platform:V2X-01", {
             "msg_type": "unsubscribe",
             "tenant": sub.tenant,
@@ -56,4 +58,5 @@ class SubscriptionManager:
         return {
             "subscriptions": len(self.subs),
             "active": sum(1 for s in self.subs.values() if s.state == "ACTIVE"),
+            "revoked": self.revoked,
         }

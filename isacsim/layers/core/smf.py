@@ -15,6 +15,7 @@ class SMF(NetworkFunction):
         self.bus = bus
         self.amf = amf
         self.sessions: dict[str, PDUSession] = {}
+        self.degraded: set[str] = set()
         self._session_seq = 0
         self._ip_seq = 0
 
@@ -108,6 +109,10 @@ class SMF(NetworkFunction):
         old = qos.five_qi
         qos.five_qi = int(five_qi)
         qos.gfbr_kbps = int(gfbr_kbps)
+        if int(five_qi) <= 9:
+            self.degraded.add(ue_id)
+        else:
+            self.degraded.discard(ue_id)
         tr = trace or self.factory.new_trace()
         ctx.emit("core.qos", self.entity, session.upf_id, {
             "msg_type": "qos_flow_modify",
@@ -150,5 +155,6 @@ class SMF(NetworkFunction):
         out.update({
             "sessions": len(self.sessions),
             "active_sessions": sum(1 for s in self.sessions.values() if s.state == "ACTIVE"),
+            "degraded_sessions": len(self.degraded),
         })
         return out

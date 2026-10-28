@@ -12,6 +12,7 @@ class Dispatcher:
         self._seq = 0
         self.sent = 0
         self.rejected = 0
+        self.bursts = 0
 
     def submit(self, ctx, *, iam: IAM, audit: AuditLog, token_id: str,
                vehicle_ids: list[str], command: str,
@@ -54,6 +55,8 @@ class Dispatcher:
             self.rejected += 1
             return cmd
         self.sent += 1
+        if len(vehicle_ids) >= 3:
+            self.bursts += 1
         decel = float(params.get("decel_mps2", 3.0))
         duration = float(params.get("duration_s", 1.2))
         control = ctx.extras.get("layers", {}).get("control")
@@ -70,4 +73,5 @@ class Dispatcher:
         return cmd
 
     def snapshot(self) -> dict:
-        return {"commands": len(self.commands), "sent": self.sent, "rejected": self.rejected}
+        return {"commands": len(self.commands), "sent": self.sent,
+                "rejected": self.rejected, "bursts": self.bursts}

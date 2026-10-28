@@ -7,6 +7,7 @@ from __future__ import annotations
 from ...config import SceneCfg
 from ...core.ids import TraceFactory
 from ..defense import emit_defense
+from ..health import attach_health, compute_health
 from .amf import AMF
 from .ausf import AUSF
 from .bus import CoreBus
@@ -60,19 +61,87 @@ class CoreLayer:
 
     # ------------------------------------------------------------------
     def snapshot(self) -> dict:
+        enabled = self.cfg.enabled
+        amf = self.amf.snapshot()
+        smf = self.smf.snapshot()
+        upf = self.upf.snapshot()
+        nef = self.nef.snapshot()
+        udm = self.udm.snapshot()
+        ausf = self.ausf.snapshot()
+
+        amf_load = max(
+            float(amf.get("load_hint", 0.0)),
+            float(amf.get("queue_depth", 0)) / max(1, self.amf.queue_capacity),
+        )
+        amf_err = amf["rejected"] / max(1, amf["received"])
+        amf_health = compute_health(
+            enabled=enabled, load=amf_load, error_rate=amf_err,
+            anomaly=bool(self.amf.overloaded),
+            reasons=(["overloaded"] if self.amf.overloaded else []),
+            metrics={"queue_depth": amf.get("queue_depth", 0)},
+        )
+
+        smf_load = smf.get("degraded_sessions", 0) / max(1, smf.get("sessions", 0))
+        smf_err = smf["rejected"] / max(1, smf["received"])
+        smf_health = compute_health(
+            enabled=enabled, load=smf_load, error_rate=smf_err,
+            warning=smf.get("degraded_sessions", 0) > 0,
+            reasons=([f"degraded QoS {smf['degraded_sessions']}"]
+                     if smf.get("degraded_sessions") else []),
+        )
+
+        upf_load = smf.get("degraded_sessions", 0) / max(1, upf.get("flows", 0))
+        upf_health = compute_health(
+            enabled=enabled, load=upf_load,
+            anomaly=bool(upf.get("route_override")),
+            warning=smf.get("degraded_sessions", 0) > 0,
+            reasons=(["route override"] if upf.get("route_override") else []),
+            metrics={"route": upf.get("route")},
+        )
+
+        nef_health = compute_health(
+            enabled=enabled,
+            anomaly=bool(nef.get("unsubscribed") or nef.get("revoked")),
+            reasons=(
+                [f"unsubscribed {nef['unsubscribed']}"] if nef.get("unsubscribed") else []
+            ) + (
+                [f"revoked {nef['revoked']}"] if nef.get("revoked") else []
+            ),
+        )
+        udm_err = udm["rejected"] / max(1, udm["received"])
+        udm_health = compute_health(enabled=enabled, error_rate=udm_err,
+                                    load=udm.get("subscribers", 0) / 1000.0)
+        ausf_err = ausf["rejected"] / max(1, ausf["received"])
+        ausf_health = compute_health(enabled=enabled, error_rate=ausf_err)
+
+        dn_health = compute_health(
+            enabled=enabled,
+            anomaly=bool(upf.get("route_override")),
+            reasons=["route hijack"] if upf.get("route_override") else [],
+        )
+        gnb_health = compute_health(
+            enabled=enabled,
+            load=len(self._known) / 120.0,
+            reasons=[f"attached {len(self._known)}"] if self._known else [],
+        )
+
         return {
-            "enabled": self.cfg.enabled,
+            "enabled": enabled,
             "attached": len(self._known),
             "registered": len(self.amf.ues),
             "sessions": len(self.smf.sessions),
             "flows": len(self.upf.flows),
             "bus_pending": self.bus.pending(),
-            "amf": self.amf.snapshot(),
-            "smf": self.smf.snapshot(),
-            "upf": self.upf.snapshot(),
-            "udm": self.udm.snapshot(),
-            "ausf": self.ausf.snapshot(),
-            "nef": self.nef.snapshot(),
+            "amf": attach_health(amf, amf_health),
+            "smf": attach_health(smf, smf_health),
+            "upf": attach_health(upf, upf_health),
+            "nef": attach_health(nef, nef_health),
+            "udm": attach_health(udm, udm_health),
+            "ausf": attach_health(ausf, ausf_health),
+            "dn": {"entity": "dn:DN-01", "route": upf.get("route"),
+                   "health": dn_health},
+            "gnb": {"entity": "gnb:GNB-01", "attached": len(self._known),
+                    "health": gnb_health},
         }
 
     def graph_nodes(self) -> list[dict]:

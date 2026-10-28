@@ -91,5 +91,7 @@ class UPF(NetworkFunction):
         out.update({
             "flows": len(self.flows),
             "teids": len({f.teid for f in self.flows.values()}),
+            "route_override": self.route_override,
+            "route": self.route_override or "dn:DN-01",
         })
         return out

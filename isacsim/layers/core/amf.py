@@ -17,10 +17,14 @@ class AMF(NetworkFunction):
         self.ues: dict[str, UEContext] = {}
         self.handovers = 0
         self.overloaded = False
+        self.load_hint = 0.0
+        self.queue_depth = 0
         self._ue_seq = 0
 
     def set_overload(self, ctx, flag: bool, *, trace=None) -> None:
         self.overloaded = bool(flag)
+        self.load_hint = 0.85 if flag else 0.0
+        self.queue_depth = int(self.queue_capacity * 0.85) if flag else 0
         ctx.emit("core.nas", self.entity, self.entity, {
             "msg_type": "amf_overload",
             "result": "enter" if flag else "clear",
@@ -170,6 +174,8 @@ class AMF(NetworkFunction):
         out.update({
             "registered": len(self.ues),
             "handovers": self.handovers,
+            "queue_depth": self.queue_depth,
+            "load_hint": round(self.load_hint, 3),
             "ues": [
                 {"ue_id": u.ue_id, "gnb_id": u.gnb_id, "state": u.state,
                  "pdu_session_id": u.pdu_session_id}

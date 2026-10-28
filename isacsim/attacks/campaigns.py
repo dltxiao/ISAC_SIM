@@ -387,6 +387,7 @@ class CampaignA5(AttackInstance):
     def tick(self, ctx) -> None:
         if not self.started or self.finished:
             return
+        ctx.extras["platform_ingest_delay_ms"] = 200.0
         if ctx.t - self._last < 0.1:
             return
         self._last = ctx.t
@@ -612,7 +613,10 @@ class CampaignA6(AttackInstance):
         ctx.stats.note("attack", f"A6 将 {self.veh_id} 的 QoS 5QI 79→9")
 
     def tick(self, ctx) -> None:
-        if not self.started or self.finished or self._done:
+        if not self.started or self.finished:
+            return
+        ctx.extras["platform_ingest_delay_ms"] = 80.0
+        if self._done:
             return
         self._done = True
         veh = ctx.vehicles.get(self.veh_id)
@@ -693,7 +697,10 @@ class CampaignA8(AttackInstance):
         ctx.stats.note("attack", f"A8 退订 DENM/SPaT，目标 {self.veh_id}")
 
     def tick(self, ctx) -> None:
-        if not self.started or self.finished or self._done:
+        if not self.started or self.finished:
+            return
+        ctx.extras["platform_ingest_delay_ms"] = 80.0
+        if self._done:
             return
         self._done = True
         control = ctx.extras.get("layers", {}).get("control")
@@ -761,6 +768,8 @@ class CampaignA10(AttackInstance):
             return payload
 
         self.hook(ctx, "sensing.radar.echo", hook)
+        core.amf.load_hint = 0.70
+        core.amf.queue_depth = int(core.amf.queue_capacity * 0.70)
         platform.audit.append(ctx, actor="attacker:A10", action="probe",
                               resource="audit", result="accept")
         platform.audit.suppress(2)
@@ -791,6 +800,13 @@ class CampaignA10(AttackInstance):
             control = ctx.extras.get("layers", {}).get("control")
             if control is not None:
                 control.inject_brake(ctx, self.veh_id, decel=1.2, duration=0.8)
+
+    def stop(self, ctx) -> None:
+        core = ctx.extras.get("layers", {}).get("core")
+        if core is not None:
+            core.amf.load_hint = 0.0
+            core.amf.queue_depth = 0
+        super().stop(ctx)
 
     def truth(self) -> TruthEvent:
         ev = super().truth()

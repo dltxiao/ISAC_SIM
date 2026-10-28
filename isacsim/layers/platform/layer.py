@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from ...config import SceneCfg
 from ..defense import emit_defense
+from ..health import compute_health
 from .audit import AuditLog
 from .dispatch import Dispatcher
 from .iam import IAM
@@ -97,15 +98,42 @@ class PlatformLayer:
 
     def snapshot(self) -> dict:
         elapsed = max(self._last_t, 1.0)
+        ingest = self.ingest.snapshot()
+        iam = self.iam.snapshot()
+        subs = self.subs.snapshot()
+        disp = self.dispatcher.snapshot()
+        audit = self.audit.snapshot()
+        qps = self.ingest.count / elapsed
+        anomaly = bool(
+            ingest["dropped"] > 0 or ingest["provenance_bad"] > 0
+            or iam["rejected"] > 0 or disp["rejected"] > 0
+            or disp["bursts"] > 0 or audit["suppressed"] > 0
+            or subs["revoked"] > 0
+        )
+        warning = bool(ingest["slow"] > 0)
         return {
             "enabled": self.cfg.enabled,
             "tenant": self.tenant,
-            "qps": round(self.ingest.count / elapsed, 2),
-            "ingest": self.ingest.snapshot(),
-            "iam": self.iam.snapshot(),
-            "subscriptions": self.subs.snapshot(),
-            "dispatcher": self.dispatcher.snapshot(),
-            "audit": self.audit.snapshot(),
+            "qps": round(qps, 2),
+            "ingest": ingest,
+            "iam": iam,
+            "subscriptions": subs,
+            "dispatcher": disp,
+            "audit": audit,
+            "health": compute_health(
+                enabled=self.cfg.enabled,
+                load=qps / max(1.0, self.cfg.api_qps),
+                anomaly=anomaly, warning=warning,
+                reasons=(
+                    [f"ingest dropped {ingest['dropped']}"] if ingest["dropped"] else []
+                ) + (
+                    [f"control bursts {disp['bursts']}"] if disp["bursts"] else []
+                ),
+                metrics={"qps": round(qps, 2),
+                         "api_qps": self.cfg.api_qps,
+                         "dropped": ingest["dropped"],
+                         "slow": ingest["slow"]},
+            ),
         }
 
     def graph_nodes(self) -> list[dict]:

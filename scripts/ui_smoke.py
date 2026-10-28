@@ -34,6 +34,17 @@ def main(url: str = "http://127.0.0.1:8080") -> int:
         assert vehicles not in ("0", ""), "画布没有车辆"
         assert canvas_len > 20000, "画布为空"
 
+        nodes = page.evaluate("document.getElementById('map').dataset.coreNodes")
+        mode = page.evaluate("document.getElementById('map').dataset.viewMode")
+        print(f"[2.1] 核心网叠加：mode={mode} nodes={nodes}")
+        assert mode == "overlay", "默认视图不是叠加"
+        assert nodes not in (None, "", "0"), "核心网节点没有绘制"
+        page.click("#viewSwitch button[data-view='core']")
+        page.wait_for_timeout(400)
+        assert page.evaluate("document.getElementById('map').dataset.viewMode") == "core"
+        page.click("#viewSwitch button[data-view='overlay']")
+        page.wait_for_timeout(300)
+
         page.click("button[data-tab='attack']")
         page.select_option("#attackType", "A1")
         page.fill("#attackCount", "2")

@@ -8,6 +8,10 @@ class Ingest:
     def __init__(self) -> None:
         self.count = 0
         self.rejected = 0
+        self.slow = 0
+        self.dropped = 0
+        self.max_latency_ms = 0.0
+        self.provenance_bad = 0
 
     @staticmethod
     def _msg_type(event: dict[str, Any]) -> str:
@@ -47,6 +51,13 @@ class Ingest:
         self.count += 1
         latency = 2.0 + float(ctx.extras.get("platform_ingest_delay_ms", 0.0))
         result = "dropped" if dropped else ("accept" if ok else "reject")
+        if dropped:
+            self.dropped += 1
+        if latency >= 50.0:
+            self.slow += 1
+        self.max_latency_ms = max(self.max_latency_ms, latency)
+        if provenance not in (None, "dn:DN-01"):
+            self.provenance_bad += 1
         payload = {
             "msg_type": msg_type,
             "platform_id": "platform:V2X-01",
@@ -63,4 +74,11 @@ class Ingest:
         return payload
 
     def snapshot(self) -> dict:
-        return {"ingested": self.count, "rejected": self.rejected}
+        return {
+            "ingested": self.count,
+            "rejected": self.rejected,
+            "dropped": self.dropped,
+            "slow": self.slow,
+            "max_latency_ms": round(self.max_latency_ms, 2),
+            "provenance_bad": self.provenance_bad,
+        }
