@@ -35,6 +35,9 @@ python3 -m venv .venv
 # 6. 批量生成并评估
 .venv/bin/python -m isacsim batch --out out/ds --attacks 300 --normal 300 --duration 15 --workers 16 --no-streams
 .venv/bin/python -m isacsim eval --runs out/ds
+
+# 7. 清理旧 Web 会话（默认只预览，--yes 才删除）
+.venv/bin/python -m isacsim clean --keep 3
 ```
 
 ## 组成
