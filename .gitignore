@@ -10,3 +10,8 @@ runs/
 .DS_Store
 
 figs/.cache/
+
+# 项目原始资料（仅本地保留，不入库）
+任务原始来源.png
+指标解释.docx
+附件1*.pdf
