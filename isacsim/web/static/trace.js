@@ -9,6 +9,8 @@
     selectedTarget: null,
     filter: "",
     follow: true,
+    eventCache: new Map(),
+    lastKey: "",
   };
   let pending = null;
   let raf = 0;
@@ -75,11 +77,16 @@
 
   function apply(snap) {
     state.snap = snap;
+    // 状态/时间这类轻量区域每次都更新；列表只在 cursor/step/state 真正变化时重绘。
     renderHeader();
+    renderBanner();
+    const step = snap.last_step || {};
+    const key = `${snap.cursor}:${step.step_id || ""}:${snap.state || ""}:${snap.pause_reason || ""}`;
+    if (key === state.lastKey) return;
+    state.lastKey = key;
     renderTree();
     renderCards();
     renderEvents();
-    renderBanner();
     renderTimeline();
   }
 
@@ -241,11 +248,6 @@
       </article>`);
     }
     $("cards").innerHTML = cards.join("") || `<p class="muted">暂无 target</p>`;
-    $("cards").querySelectorAll("tr[data-raw]").forEach((tr) => {
-      tr.onclick = () => {
-        try { showDetail(JSON.parse(decodeURIComponent(tr.dataset.raw))); } catch (e) { /* ignore */ }
-      };
-    });
   }
 
   // ----------------------------------------------------------- events
@@ -257,29 +259,51 @@
       $("traceEvents").innerHTML = `<p class="muted small">暂无事件</p>`;
       return;
     }
+    // 缓存最近事件，避免选中项被快照窗口挤掉后 Detail 失效。
+    for (const e of events) state.eventCache.set(e.seq, e);
+    if (state.eventCache.size > 300) {
+      const drop = state.eventCache.size - 300;
+      let i = 0;
+      for (const k of state.eventCache.keys()) {
+        if (i++ >= drop) break;
+        state.eventCache.delete(k);
+      }
+    }
     $("traceEvents").innerHTML = `<div class="event-list">` + events.map((e) => {
       const cls = e.kind.startsWith("attack") ? "attack"
         : e.kind === "alert" ? "alert"
         : e.kind.includes("speed") || e.kind.includes("rise") ? "effect" : "";
       const active = state.selectedEvent === e.seq ? "active" : "";
-      return `<div class="event-item ${cls} ${active}" data-seq="${e.seq}">
+      const forged = e.data && e.data.forged ? " forged" : "";
+      return `<div class="event-item ${cls} ${active}${forged}" data-seq="${e.seq}" tabindex="0">
         <span class="et">${esc(fmt(e.t, 2))}s</span>
         <span class="ek">${esc(e.kind)}</span>
         <span class="es">${esc(e.summary)}</span>
       </div>`;
     }).join("") + `</div>`;
-    $("traceEvents").querySelectorAll(".event-item").forEach((el) => {
-      el.onclick = () => {
-        state.selectedEvent = Number(el.dataset.seq);
-        const ev = (state.snap.events || []).find((x) => x.seq === state.selectedEvent);
-        if (ev) showDetail(ev);
-        renderEvents();
-      };
-    });
+  }
+
+  function selectEvent(seq) {
+    const ev = (state.snap && (state.snap.events || []).find((x) => x.seq === seq))
+            || state.eventCache.get(seq);
+    if (!ev) {
+      toast("该事件已超出缓存范围，请重新选择");
+      return;
+    }
+    state.selectedEvent = seq;
+    state.eventCache.set(seq, ev);
+    showDetail(ev);
+    // 只切换 active，不重建列表
+    document.querySelectorAll("#traceEvents .event-item.active")
+      .forEach((el) => el.classList.remove("active"));
+    const item = document.querySelector(`#traceEvents .event-item[data-seq="${seq}"]`);
+    if (item) item.classList.add("active");
   }
 
   function showDetail(obj) {
-    $("eventDetail").textContent = JSON.stringify(obj, null, 2);
+    const box = $("eventDetail");
+    box.textContent = JSON.stringify(obj, null, 2);
+    box.scrollTop = 0;
   }
 
   // ----------------------------------------------------------- banner
@@ -326,6 +350,27 @@
     }
     $("timelineMarks").innerHTML = marks.join("");
   }
+
+  // 稳定容器上的事件委托：列表重绘不会丢掉点击处理器。
+  $("traceEvents").addEventListener("pointerdown", (e) => {
+    const item = e.target.closest && e.target.closest(".event-item");
+    if (!item) return;
+    selectEvent(Number(item.dataset.seq));
+  });
+  $("traceEvents").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const item = e.target.closest && e.target.closest(".event-item");
+    if (!item) return;
+    e.preventDefault();
+    selectEvent(Number(item.dataset.seq));
+  });
+  $("cards").addEventListener("pointerdown", (e) => {
+    const tr = e.target.closest && e.target.closest("tr[data-raw]");
+    if (!tr) return;
+    try {
+      showDetail(JSON.parse(decodeURIComponent(tr.dataset.raw)));
+    } catch (err) { /* ignore */ }
+  });
 
   // ---------------------------------------------------------- controls
   async function post(path, body = {}) {

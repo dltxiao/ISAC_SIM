@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 import webbrowser
 from pathlib import Path
 from typing import Any
@@ -79,12 +80,24 @@ def create_app() -> FastAPI:
     @app.get("/api/trace/stream")
     async def trace_stream() -> StreamingResponse:
         async def gen():
+            last_sig = None
+            last_ping = 0.0
             while True:
                 try:
                     payload = MANAGER.trace_state()
-                    cursor = payload.get("cursor", 0)
-                    data = json.dumps(payload, ensure_ascii=False)
-                    yield f"id: {cursor}\nevent: trace\ndata: {data}\n\n"
+                    step = payload.get("last_step") or {}
+                    sig = (payload.get("cursor", 0), payload.get("state"),
+                           step.get("step_id"), payload.get("pause_reason"))
+                    now = time.monotonic()
+                    if sig != last_sig:
+                        last_sig = sig
+                        last_ping = now
+                        data = json.dumps(payload, ensure_ascii=False)
+                        yield f"id: {payload.get('cursor', 0)}\nevent: trace\ndata: {data}\n\n"
+                    elif now - last_ping >= 5.0:
+                        # 暂停/无变化时只发心跳，避免前端反复重建列表
+                        last_ping = now
+                        yield ": ping\n\n"
                 except Exception as exc:  # noqa: BLE001
                     yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
                 await asyncio.sleep(0.1)

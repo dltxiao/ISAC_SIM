@@ -152,6 +152,8 @@ table.watch-table td {
 table.watch-table tr.new td { background: rgba(240,169,59,.12); }
 table.watch-table tr.ghost td { color: #ffb4b4; }
 table.watch-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.watch-table tbody tr { cursor: pointer; }
+table.watch-table tbody tr:hover td { background: rgba(59,167,255,.06); }
 .flag {
   display: inline-block; padding: 1px 4px; border-radius: 3px;
   font: 9px/1.4 var(--trace-mono); background: #3c1d1d; color: #ffadad;
@@ -166,6 +168,7 @@ table.watch-table td.num { text-align: right; font-variant-numeric: tabular-nums
   font: 10.5px/1.35 var(--trace-mono); cursor: pointer;
 }
 .event-item:hover { background: #15212d; }
+.event-item:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 .event-item.active { background: #17283a; }
 .event-item .et { color: #6f8aa5; }
 .event-item .ek { color: #8fb2d1; overflow: hidden; text-overflow: ellipsis; }
