@@ -82,10 +82,24 @@ class IAM:
         return True
 
     def snapshot(self) -> dict:
+        tokens = sorted(self.tokens.values(), key=lambda t: t.token_id)
+        rows = [{
+            "token_id": token.token_id,
+            "subject": token.subject,
+            "tenant": token.tenant,
+            "scopes": ",".join(token.scopes),
+            "issued_at": round(token.issued_at, 3),
+            "expires_at": round(token.expires_at, 3),
+            "revoked": token.revoked,
+        } for token in tokens[:40]]
         return {
             "tokens": len(self.tokens),
             "active_tokens": sum(1 for t in self.tokens.values()
                                  if not t.revoked and t.expires_at > 0),
             "issued": self.issued,
             "rejected": self.rejected,
+            # 有界只读列表，供 trace/Web 使用；tokens 计数语义不变。
+            "token_list": rows,
+            "token_list_total": len(tokens),
+            "token_list_truncated": len(tokens) > 40,
         }

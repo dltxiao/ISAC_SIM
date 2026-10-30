@@ -55,8 +55,20 @@ class SubscriptionManager:
                 if s.state == "ACTIVE" and event_type in s.event_types]
 
     def snapshot(self) -> dict:
+        subs = sorted(self.subs.values(), key=lambda s: s.sub_id)
+        rows = [{
+            "sub_id": sub.sub_id,
+            "tenant": sub.tenant,
+            "event_types": ",".join(sub.event_types),
+            "callback": sub.callback,
+            "state": sub.state,
+        } for sub in subs[:40]]
         return {
             "subscriptions": len(self.subs),
             "active": sum(1 for s in self.subs.values() if s.state == "ACTIVE"),
             "revoked": self.revoked,
+            # 有界只读列表，供 trace/Web 使用；计数语义不变。
+            "subscription_list": rows,
+            "subscription_list_total": len(subs),
+            "subscription_list_truncated": len(subs) > 40,
         }

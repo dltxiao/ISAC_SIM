@@ -37,6 +37,24 @@ CORE_FLOW_FIELDS = [
     {"name": "state", "type": "enum"},
 ]
 
+PLATFORM_TOKEN_FIELDS = [
+    {"name": "token_id", "type": "string", "role": "identity"},
+    {"name": "subject", "type": "string"},
+    {"name": "tenant", "type": "string"},
+    {"name": "scopes", "type": "string"},
+    {"name": "issued_at", "type": "float", "unit": "s", "precision": 2},
+    {"name": "expires_at", "type": "float", "unit": "s", "precision": 2},
+    {"name": "revoked", "type": "bool", "role": "flag"},
+]
+
+PLATFORM_SUBSCRIPTION_FIELDS = [
+    {"name": "sub_id", "type": "string", "role": "identity"},
+    {"name": "tenant", "type": "string"},
+    {"name": "event_types", "type": "string"},
+    {"name": "callback", "type": "string"},
+    {"name": "state", "type": "enum"},
+]
+
 CORE_NODES = [
     ("core:amf", "amf", "AMF", 33),
     ("core:smf", "smf", "SMF", 34),
@@ -211,7 +229,17 @@ class PlatformProvider(BaseProvider):
                 "platform:summary", "struct", "Platform", "V2X platform · summary",
                 "平台 IAM/订阅/Ingest/云控/审计与健康状态",
                 order=44,
-            )
+            ),
+            ProviderTarget(
+                "platform:tokens", "table", "Platform", "Platform · tokens",
+                "IAM token（最多 40 条）；来源 platform.iam.token_list",
+                fields=PLATFORM_TOKEN_FIELDS, key_field="token_id", order=45,
+            ),
+            ProviderTarget(
+                "platform:subscriptions", "table", "Platform", "Platform · subscriptions",
+                "租户订阅（最多 40 条）；来源 platform.subs.subscription_list",
+                fields=PLATFORM_SUBSCRIPTION_FIELDS, key_field="sub_id", order=46,
+            ),
         ]
 
     def poll(self, ctx) -> list[ProviderFrame]:
@@ -247,9 +275,31 @@ class PlatformProvider(BaseProvider):
             "health_score": h.get("score"),
             "health_reasons": ", ".join(str(x) for x in (h.get("reasons") or [])),
         }
-        return [
+        frames = [
             ProviderFrame(
                 "platform:summary", values,
                 summary=f"{values['health_status']} · qps {values['qps']}",
             )
         ]
+        tokens = iam.get("token_list") or []
+        frames.append(ProviderFrame(
+            "platform:tokens",
+            {
+                "rows": tokens[:40],
+                "total": iam.get("token_list_total", len(tokens)),
+                "truncated": bool(iam.get("token_list_truncated", len(tokens) > 40)),
+            },
+            summary=f"{iam.get('token_list_total', len(tokens))} tokens",
+        ))
+        subscriptions = subs.get("subscription_list") or []
+        frames.append(ProviderFrame(
+            "platform:subscriptions",
+            {
+                "rows": subscriptions[:40],
+                "total": subs.get("subscription_list_total", len(subscriptions)),
+                "truncated": bool(subs.get("subscription_list_truncated",
+                                           len(subscriptions) > 40)),
+            },
+            summary=f"{subs.get('subscription_list_total', len(subscriptions))} subscriptions",
+        ))
+        return frames

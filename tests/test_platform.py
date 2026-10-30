@@ -24,6 +24,10 @@ def test_platform_ingests_v2x_messages():
     assert snap["ingest"]["ingested"] > 0
     assert snap["iam"]["tokens"] >= 2
     assert snap["subscriptions"]["active"] >= 1
+    assert snap["iam"]["token_list"]
+    assert snap["subscriptions"]["subscription_list"]
+    assert snap["iam"]["token_list"][0]["token_id"].startswith("tok-")
+    assert snap["subscriptions"]["subscription_list"][0]["sub_id"].startswith("sub-")
     assert any(r.stream == "app.subscription" for r in sink.records)
     assert any(r.stream == "app.auth" for r in sink.records)
 

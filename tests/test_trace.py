@@ -28,7 +28,8 @@ def test_trace_core_provider_without_attack():
     assert snap["last_layer"] == "platform"
     ids = {t["id"] for t in snap["targets"]}
     assert {"core:summary", "core:amf", "core:upf", "core:ues",
-            "core:sessions", "core:flows", "platform:summary"}.issubset(ids)
+            "core:sessions", "core:flows", "platform:summary",
+            "platform:tokens", "platform:subscriptions"}.issubset(ids)
     summary = snap["frames"]["core:summary"]["values"]
     assert summary["registered"] > 0
     assert summary["sessions"] > 0
@@ -44,6 +45,12 @@ def test_trace_core_provider_without_attack():
     assert flows["rows"][0]["flow_id"].startswith("flow-")
     platform = snap["frames"]["platform:summary"]["values"]
     assert platform["health_status"] in ("green", "orange", "red")
+    tokens = snap["frames"]["platform:tokens"]["values"]
+    assert tokens["total"] > 0 and tokens["rows"]
+    assert tokens["rows"][0]["token_id"].startswith("tok-")
+    subs = snap["frames"]["platform:subscriptions"]["values"]
+    assert subs["total"] > 0 and subs["rows"]
+    assert subs["rows"][0]["sub_id"].startswith("sub-")
 
 
 def test_trace_core_provider_disabled():
