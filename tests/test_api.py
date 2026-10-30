@@ -48,3 +48,12 @@ def test_trace_state_without_session(client):
 def test_trace_step_without_session_conflict(client):
     r = client.post("/api/trace/step", json={"mode": "checkpoint"})
     assert r.status_code == 409
+
+
+def test_core_platform_chain_defense_endpoints(client):
+    assert client.get("/api/core").status_code == 200
+    assert client.get("/api/platform").status_code == 200
+    chain = client.get("/api/chain").json()
+    assert "chains" in chain and "chain_count" in chain
+    defense = client.get("/api/defense").json()
+    assert "actions" in defense

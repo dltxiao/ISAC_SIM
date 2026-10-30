@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://isacsim.local/record.v2.json",
+  "title": "ISAC-SIM record v2",
+  "type": "object",
+  "required": ["schema", "run_id", "stream", "ts_ns", "t_wall_ns", "source", "entity", "payload"],
+  "properties": {
+    "schema": {"const": "isacsim.record/2"},
+    "run_id": {"type": "string"},
+    "stream": {
+      "type": "string",
+      "pattern": "^(sensing|v2x|uu|auth|control|task|link|graph|core|app|defense)\\."
+    },
+    "ts_ns": {"type": "integer"},
+    "t_wall_ns": {"type": "integer"},
+    "source": {"type": "string"},
+    "entity": {
+      "type": "string",
+      "pattern": "^(veh|rsu|gnb|obj|attacker|net|MEC|graph|ue|amf|smf|upf|nef|udm|ausf|pcf|nrf|platform|tenant|token|session|flow):"
+    },
+    "trace_id": {"type": ["string", "null"]},
+    "span_id": {"type": ["string", "null"]},
+    "parent_span_id": {"type": ["string", "null"]},
+    "chain_id": {"type": ["string", "null"]},
+    "payload": {"type": "object"}
+  },
+  "additionalProperties": false
+}

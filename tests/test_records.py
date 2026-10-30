@@ -8,9 +8,10 @@ def test_record_schema(tmp_path):
     rec = Record(stream="v2x.cam", ts_ns=123, source="OBU-1", entity="veh:OBU-1",
                  payload={"a": 1})
     d = rec.to_dict("run1")
-    assert d["schema"] == "isacsim.record/1"
+    assert d["schema"] == "isacsim.record/2"
     assert d["run_id"] == "run1"
     assert d["payload"] == {"a": 1}
+    assert "trace_id" not in d  # trace 字段可选，未传时不写
 
 
 def test_jsonl_sink(tmp_path):

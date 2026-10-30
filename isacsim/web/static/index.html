@@ -54,6 +54,17 @@
       <span><i class="dot gnb"></i>gNB</span>
       <span><i class="dot ghost"></i>幽灵目标</span>
     </div>
+    <div class="viewswitch" id="viewSwitch">
+      <button data-view="road">路网</button>
+      <button data-view="overlay" class="active">叠加</button>
+      <button data-view="core">核心网</button>
+    </div>
+    <div class="core-legend" id="coreLegend">
+      <span><i class="dot healthy"></i>健康</span>
+      <span><i class="dot busy"></i>繁忙</span>
+      <span><i class="dot congested"></i>拥塞/异常</span>
+      <span><i class="dot unknown"></i>未知</span>
+    </div>
     <div class="hint" id="mapHint">启动仿真后显示实时车辆与攻击叠加</div>
     <div class="tooltip" id="tooltip"></div>
   </section>
@@ -62,6 +73,7 @@
     <nav class="tabs">
       <button data-tab="entities" class="active">参与实体</button>
       <button data-tab="stats">统计</button>
+      <button data-tab="infra">网络/平台</button>
       <button data-tab="attack">攻击编排</button>
       <button data-tab="logs">事件日志</button>
       <button data-tab="runs">运行产物</button>
@@ -97,6 +109,22 @@
       </div>
     </div>
 
+    <div class="tab-pane" id="tab-infra">
+      <h3>语义核心网</h3>
+      <div class="summary" id="coreSummary"></div>
+      <h3>V2X 平台</h3>
+      <div class="summary" id="platformSummary"></div>
+      <h3>防御动作</h3>
+      <div class="table-wrap short">
+        <table class="grid" id="defenseTable">
+          <thead><tr><th>动作</th><th>目标</th><th>结果</th><th>时延</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <h3>攻击链</h3>
+      <div id="chainList" class="chainlist"></div>
+    </div>
+
     <div class="tab-pane" id="tab-attack">
       <form id="attackForm" class="form">
         <label>攻击类型
@@ -106,6 +134,12 @@
               <option value="A2">A2 物理欺骗 + 控制误导</option>
               <option value="A3">A3 跨层隐蔽（雷达回波渐偏）</option>
               <option value="A4">A4 双因素仿冒</option>
+              <option value="A5">A5 信令风暴 → 远控失控</option>
+              <option value="A6">A6 切片/QoS 抢占</option>
+              <option value="A7">A7 UPF/N6 劫持 → 伪造 CPM</option>
+              <option value="A8">A8 NEF/订阅篡改</option>
+              <option value="A9">A9 平台越权/云控注入</option>
+              <option value="A10">A10 跨层隐蔽组合</option>
             </optgroup>
             <optgroup label="单体攻击原语">
               <option value="ghost_object">伪造感知目标</option>

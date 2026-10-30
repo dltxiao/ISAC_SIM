@@ -1,7 +1,10 @@
 """观测记录与落盘 Sink。
 
-统一记录格式（schema v1）：
-    {"schema","run_id","stream","ts_ns","t_wall_ns","source","entity","payload"}
+统一记录格式（schema v2）：
+    {"schema","run_id","stream","ts_ns","t_wall_ns","source","entity",
+     "trace_id","span_id","parent_span_id","payload"}
+
+trace 字段可选；v1 记录读取时缺省为空。
 """
 from __future__ import annotations
 
@@ -23,13 +26,17 @@ class Record:
     entity: str
     payload: dict[str, Any]
     t_wall_ns: int = 0
+    trace_id: str | None = None
+    span_id: str | None = None
+    parent_span_id: str | None = None
+    chain_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.t_wall_ns:
             self.t_wall_ns = time.monotonic_ns()
 
     def to_dict(self, run_id: str) -> dict[str, Any]:
-        return {
+        out = {
             "schema": SCHEMA_VERSION,
             "run_id": run_id,
             "stream": self.stream,
@@ -39,6 +46,13 @@ class Record:
             "entity": self.entity,
             "payload": self.payload,
         }
+        if self.trace_id is not None:
+            out["trace_id"] = self.trace_id
+            out["span_id"] = self.span_id
+            out["parent_span_id"] = self.parent_span_id
+        if self.chain_id is not None:
+            out["chain_id"] = self.chain_id
+        return out
 
     def encode(self, run_id: str) -> bytes:
         return json.dumps(self.to_dict(run_id), ensure_ascii=False,

@@ -41,6 +41,7 @@ class RunStats:
         self.alert_total = 0
         self.anomaly_entities: set[str] = set()
         self.latencies_ms: deque[float] = deque(maxlen=20_000)
+        self.defense_actions: deque[dict[str, Any]] = deque(maxlen=50)
         self.sim_time = 0.0
         self.vehicles = 0
         self.state = "idle"
@@ -95,6 +96,10 @@ class RunStats:
             return round(data[idx], 3)
         return {"p50": q(0.50), "p95": q(0.95), "p99": q(0.99), "n": len(data)}
 
+    def add_defense(self, payload: dict[str, Any]) -> None:
+        with self.lock:
+            self.defense_actions.append(dict(payload))
+
     def note(self, level: str, message: str) -> None:
         with self.lock:
             self.notes.append({"t": round(self.sim_time, 3), "level": level, "msg": message})
@@ -121,6 +126,7 @@ class RunStats:
                 "latency_ms": self.latency_snapshot(),
                 "wall_elapsed_s": round(time.time() - self.started_wall, 2),
                 "notes": list(self.notes)[-20:],
+                "defense_actions": list(self.defense_actions),
             }
 
 

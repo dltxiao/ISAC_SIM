@@ -215,3 +215,49 @@ footer {
 @media (max-width: 1100px) {
   main { grid-template-columns: 1fr 340px; }
 }
+
+/* v0.3.0: core/platform/chain/defense */
+.type.A5 { border-left-color: #e08a3b; }
+.type.A6 { border-left-color: #d7d24a; }
+.type.A7 { border-left-color: #e05a9a; }
+.type.A8 { border-left-color: #6ad0c0; }
+.type.A9 { border-left-color: #c084fc; }
+.type.A10 { border-left-color: #a3b3c2; }
+
+.table-wrap.short { max-height: 22vh; }
+.chainlist { display: flex; flex-direction: column; gap: 8px; }
+.chain {
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 8px; padding: 9px 10px; font-size: 12px;
+}
+.chain .head { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); }
+.chain .nodes { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.chain .node {
+  padding: 2px 6px; border-radius: 4px; background: #24313f;
+  color: var(--text); font-size: 11px;
+}
+.chain .node.root { background: #3a2a18; color: var(--warn); }
+
+/* v0.3.1: core topology overlay */
+.viewswitch {
+  position: absolute; left: 14px; top: 14px; z-index: 3;
+  display: flex; gap: 2px; padding: 3px; border-radius: 9px;
+  background: rgba(13,19,26,.88); border: 1px solid var(--line);
+  backdrop-filter: blur(4px);
+}
+.viewswitch button {
+  padding: 5px 10px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--muted); font-size: 12px;
+}
+.viewswitch button.active { background: #1b6fd6; color: #fff; }
+.core-legend {
+  position: absolute; right: 14px; top: 14px; bottom: auto; z-index: 3;
+  display: flex; gap: 12px; padding: 8px 12px; border-radius: 10px;
+  background: rgba(13,19,26,.82); border: 1px solid var(--line);
+  font-size: 12px; color: var(--muted); backdrop-filter: blur(4px);
+}
+.core-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+.core-legend .dot.healthy { background: #35c48a; }
+.core-legend .dot.busy { background: #f0a93b; }
+.core-legend .dot.congested { background: #e05a5a; }
+.core-legend .dot.unknown { background: #7d8fa3; }
