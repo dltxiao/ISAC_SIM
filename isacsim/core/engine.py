@@ -149,9 +149,13 @@ class Simulation:
             self.uu.tick(ctx)
             if self.core is not None:
                 self.core.tick(ctx)
+                if self.trace is not None:
+                    self.trace.after_layer("core", ctx)
             self.auth.tick(ctx)
             if self.platform is not None:
                 self.platform.tick(ctx)
+                if self.trace is not None:
+                    self.trace.after_layer("platform", ctx)
             self.control.tick(ctx)
             self.task.tick(ctx)
             if self.scene.streams.graph:

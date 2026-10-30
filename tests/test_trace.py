@@ -25,6 +25,7 @@ def test_trace_core_provider_without_attack():
     sim.run()
     snap = sim.trace.snapshot()
     assert snap["providers"] == ["core", "platform"]
+    assert snap["last_layer"] == "platform"
     ids = {t["id"] for t in snap["targets"]}
     assert {"core:summary", "core:amf", "core:upf", "core:ues",
             "platform:summary"}.issubset(ids)
@@ -50,6 +51,33 @@ def test_trace_core_provider_disabled():
     ids = {t["id"] for t in snap["targets"]}
     assert not any(tid.startswith("core:") for tid in ids)
     assert "platform:summary" in ids
+
+
+def test_trace_core_events_are_mapped():
+    scene = _scene(4.0, seed=14)
+    sim = Simulation(scene, run_id="trace-core-events",
+                     detector=ReferenceDetector(scene), trace=True)
+    sim.run()
+    events = list(sim.trace.events)
+    nas = [e for e in events if e["kind"] == "core.nas"]
+    assert nas
+    assert nas[0]["target_id"] == "core:amf"
+    assert nas[0]["data"]["stream"] == "core.nas"
+    assert nas[0]["data"]["count"] >= 1
+    assert any(e["kind"] == "core.session" for e in events)
+
+
+def test_a5_core_nas_is_aggregated():
+    scene = _scene(5.0, seed=14)
+    sim = Simulation(scene, run_id="trace-a5-flood",
+                     detector=ReferenceDetector(scene), trace=True)
+    sim.scheduler.submit(AttackSpec(type="A5", amplitude=0.8,
+                                    duration=2.0, start=1.0))
+    sim.run()
+    nas = [e for e in sim.trace.events if e["kind"] == "core.nas"]
+    assert nas
+    assert len(nas) < 120
+    assert any(e["data"]["count"] > 1 for e in nas)
 
 
 def test_trace_global_targets_without_attack():

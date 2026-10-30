@@ -34,6 +34,24 @@ FLEET_FIELDS = [
     {"name": "affected", "type": "bool", "role": "flag"},
 ]
 
+# 核心网/平台事件到 watch target 的默认映射；后续 TraceProfile 可覆盖。
+DOMAIN_EVENT_TARGETS = {
+    "core.nas": "core:amf",
+    "core.session": "core:smf",
+    "core.qos": "core:upf",
+    "core.upf": "core:upf",
+    "core.handover": "core:gnb",
+    "core.nef": "core:nef",
+    "app.auth": "platform:summary",
+    "app.ingest": "platform:summary",
+    "app.subscription": "platform:summary",
+    "app.control": "platform:summary",
+    "app.audit": "platform:summary",
+    "defense.action": "defense:actions",
+}
+
+DOMAIN_EVENT_STREAMS = ("core.", "app.")
+
 
 def _now() -> float:
     return time.monotonic()
@@ -136,6 +154,9 @@ class TraceService:
         self._step_index = 0
         self.last_step: dict[str, Any] | None = None
         self._pause_reason: str | None = None
+        self._layer = "init"
+        self._agg: dict[tuple, dict[str, Any]] = {}
+        self._agg_start_t = -1.0
 
         self.providers: list[Any] = []
         self._build_global_targets()
@@ -170,6 +191,8 @@ class TraceService:
                      description="信道负载与链路质量", order=40)
         self._target("det:alerts", "event", "Detection", "Detector · alerts",
                      description="参考检测器的最近告警", order=50)
+        self._target("defense:actions", "event", "Defense", "Defense · actions",
+                     description="防御动作（限流/释放/回切/吊销/隔离）", order=55)
 
     def _build_providers(self) -> None:
         """注册与攻击无关的全局域 provider（当前为 Core/Platform）。"""
@@ -292,6 +315,53 @@ class TraceService:
                     attack_id=self._attack_for_vehicle(rec.entity.split(":", 1)[-1]),
                     t=t,
                 )
+            elif rec.stream == "defense.action" or rec.stream.startswith(DOMAIN_EVENT_STREAMS):
+                self._on_domain_record(rec)
+
+    def _on_domain_record(self, rec) -> None:
+        """把 core.*/app.*/defense.* 投影成 TraceEvent，并按 100 ms 聚合。
+
+        A5 每秒可产生约 2000 条 core.nas；若逐条入 ring，几秒内就会挤掉
+        A1/A4 的关键事件。这里按 (stream,msg_type,result,cause,target) 聚合并
+        在事件 data 里保留 count，首条仍可定位时间与 entity。
+        """
+        p = rec.payload
+        stream = rec.stream
+        msg_type = str(p.get("msg_type") or p.get("action") or stream)
+        result = p.get("result") or p.get("status") or p.get("auth_result")
+        cause = p.get("cause")
+        target = DOMAIN_EVENT_TARGETS.get(stream)
+        if target not in self.targets:
+            target = None
+        summary = f"{msg_type} {result or ''}".strip()
+        if rec.entity:
+            summary = f"{summary} @ {rec.entity}"
+        if cause:
+            summary = f"{summary} ({cause})"
+
+        # 每 100 ms 一个聚合窗口；窗口内同 key 只出一条事件。
+        if self._t - self._agg_start_t >= 0.1 - 1e-9:
+            self._agg.clear()
+            self._agg_start_t = self._t
+        key = (stream, msg_type, str(result), str(cause), target or "")
+        entry = self._agg.get(key)
+        if entry is not None:
+            entry["count"] += 1
+            event = entry["event"]
+            event["data"]["count"] = entry["count"]
+            event["summary"] = f"{entry['summary']} ×{entry['count']}"
+            return
+
+        event = self._event(
+            stream, summary,
+            data={
+                "stream": stream, "source": rec.source, "entity": rec.entity,
+                "msg_type": msg_type, "result": result, "cause": cause,
+                "latency_ms": p.get("latency_ms"), "count": 1,
+            },
+            target_id=target, severity="effect",
+        )
+        self._agg[key] = {"event": event, "count": 1, "summary": summary}
 
     def _attack_for_vehicle(self, vid: str) -> str | None:
         for inst in self.sim.scheduler.instances:
@@ -329,6 +399,19 @@ class TraceService:
             self._t = ctx.t
             self._tick = ctx.tick
             self._update_attacks()
+
+    def after_layer(self, name: str, ctx) -> None:
+        """层边界：让 core/platform 的 provider 在本层结束后立即刷新。
+
+        这里只刷新 watch 帧，不在此处做检查点暂停；A5 的 after_layer:core
+        检查点要等 TraceProfile/StepController 接入后再打开。
+        """
+        if not self.enabled:
+            return
+        with self.lock:
+            self._layer = name
+            if name in ("core", "platform"):
+                self._update_providers(ctx)
 
     def after_tick(self, ctx) -> None:
         if not self.enabled:
@@ -721,6 +804,7 @@ class TraceService:
                 "state": self.sim.state,
                 "pause_reason": self._pause_reason,
                 "step_mode": self._step_mode,
+                "last_layer": self._layer,
                 "targets": targets,
                 "frames": copy.deepcopy(self.frames),
                 "events": [copy.deepcopy(e) for e in list(self.events)[-120:]],
