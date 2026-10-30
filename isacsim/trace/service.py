@@ -12,6 +12,7 @@ from collections import deque
 from typing import Any
 
 from .providers import CoreProvider, PlatformProvider
+from .profiles import TraceProfile, profile_for
 
 
 SENSOR_FIELDS = [
@@ -141,6 +142,9 @@ class TraceService:
         self._stage_done: set[str] = set()
         self._evidence: dict[str, dict] = {}
         self._evidence_floor = 0
+        self._profile: TraceProfile | None = None
+        self._profile_attack_id: str | None = None
+        self._profile_start_t = 0.0
         self._cbr_base: float | None = None
         self._offered_base: float | None = None
         self._cbr_rise_reported = False
@@ -399,19 +403,21 @@ class TraceService:
             self._t = ctx.t
             self._tick = ctx.tick
             self._update_attacks()
+        self._handle_checkpoint("after_scheduler", ctx, allow_max=False)
 
     def after_layer(self, name: str, ctx) -> None:
-        """层边界：让 core/platform 的 provider 在本层结束后立即刷新。
-
-        这里只刷新 watch 帧，不在此处做检查点暂停；A5 的 after_layer:core
-        检查点要等 TraceProfile/StepController 接入后再打开。
-        """
+        """层边界：刷新 provider；A5 的 S1/S2/S3 可在这里暂停。"""
         if not self.enabled:
             return
         with self.lock:
             self._layer = name
             if name in ("core", "platform"):
                 self._update_providers(ctx)
+        boundary = f"after_layer:{name}"
+        while self._handle_checkpoint(boundary, ctx, allow_max=False):
+            # 同一层边界可能有多个检查点（A5 的 S1/S2 都在 core 后）。
+            # 每次 step 只放行一个 StageFrame，再回到本层边界继续求值。
+            pass
 
     def after_tick(self, ctx) -> None:
         if not self.enabled:
@@ -426,11 +432,14 @@ class TraceService:
             self._update_detector()
             self._update_scene()
             self._update_providers(ctx)
-            if self._step_mode == "checkpoint":
-                self._collect_evidence()
-                self._maybe_finish_step(ctx)
+        self._handle_checkpoint("after_tick", ctx, allow_max=True)
 
     # ------------------------------------------------------------------
+    def _activate_profile(self, inst) -> None:
+        self._profile = profile_for(getattr(inst, "atype", None))
+        self._profile_attack_id = getattr(inst, "id", None)
+        self._profile_start_t = float(getattr(inst, "t0", self.sim.t) or self.sim.t)
+
     def _reset_attack_state(self) -> None:
         self._stage_done.clear()
         self._evidence.clear()
@@ -472,6 +481,7 @@ class TraceService:
                                       "finished": ended}
                 self._add_attack_targets(inst)
                 if snap.get("started"):
+                    self._activate_profile(inst)
                     self._reset_attack_state()
                 if snap.get("started"):
                     self._event(
@@ -487,6 +497,7 @@ class TraceService:
                                 data=info, attack_id=aid, target_id=f"atk:{aid}",
                                 severity="attack")
             if old and not old.get("started") and snap.get("started"):
+                self._activate_profile(inst)
                 self._reset_attack_state()
                 self._attacks[aid]["started"] = True
                 self._add_attack_targets(inst)
@@ -686,66 +697,70 @@ class TraceService:
     # ------------------------------------------------------------------
     # stepping
     def _collect_evidence(self) -> None:
-        """把“已经发生过”的关键事件按阶段归档，供分步讲解复用。"""
-        mapping = {
-            "ghost.added": "S1",
-            "control.command": "S2",
-            "pc5.rise": "S3",
-            "vehicle.speed_drop": "S4",
-            "alert": "S5",
-            "attack.end": "END",
-        }
+        """把“已经发生过”的关键事件按当前 profile 的阶段归档。"""
+        profile = self._profile
+        if profile is None:
+            return
         for ev in self.events:
-            if ev.get("seq", 0) <= self._evidence_floor:
+            if (ev.get("seq", 0) <= self._evidence_floor
+                    and float(ev.get("t", 0.0)) < self._profile_start_t - 1e-9):
                 continue
-            stage = mapping.get(ev.get("kind"))
-            if stage and stage not in self._evidence:
-                self._evidence[stage] = ev
+            # 多攻击并存时，只把当前 profile 的攻击事件归到本 profile；
+            # core/app 事件的 attack_id 可能为空，仍允许匹配。
+            event_attack = ev.get("attack_id")
+            if (event_attack and self._profile_attack_id
+                    and event_attack != self._profile_attack_id):
+                continue
+            for stage in profile.stages:
+                if stage.id in self._evidence:
+                    continue
+                if stage.matches(ev):
+                    self._evidence[stage.id] = ev
+                    break
 
-    def _maybe_finish_step(self, ctx) -> None:
+    def _maybe_finish_step(self, ctx, boundary: str,
+                           allow_max: bool = True) -> str | None:
+        """在指定边界求值；命中时生成 StepFrame 并返回 stage id。"""
         self._collect_evidence()
+        profile = self._profile
+        if profile is None:
+            return None
         reason = None
         title = None
         narrative = None
         attack_id = None
         evidence = None
-        order = ["S1", "S2", "S3", "S4", "S5", "END"]
-        for stage in order:
-            if stage in self._stage_done:
+        for stage in profile.stages:
+            if stage.id in self._stage_done:
                 continue
-            ev = self._evidence.get(stage)
+            if stage.pause_at != boundary:
+                continue
+            ev = self._evidence.get(stage.id)
             if ev is None:
                 continue
-            # A1 的告警常常早于速度下降 ~0.2 s；先让 S4 有机会出现，
-            # 0.5 s 后仍没有减速再允许 S5，避免演示顺序变成“先告警后减速”。
-            if (stage == "S5" and "S2" in self._evidence
-                    and "S4" not in self._stage_done
-                    and self._t - float(self._evidence["S2"].get("t", 0.0)) < 0.5):
-                continue
-            reason = stage
+            if stage.wait_for:
+                missing = [x for x in stage.wait_for if x not in self._stage_done]
+                if missing:
+                    ref = self._evidence.get(stage.wait_ref or "")
+                    if ref is not None and self._t - float(ref.get("t", 0.0)) < stage.wait_s:
+                        continue
+            reason = stage.id
+            title = stage.title
             evidence = ev
-            attack_id = ev.get("attack_id")
+            attack_id = ev.get("attack_id") or self._profile_attack_id
             narrative = ev.get("summary")
-            title = {
-                "S1": "目标列表被篡改",
-                "S2": "ADAS 误判制动",
-                "S3": "通信负载上升",
-                "S4": "物理后果：车辆减速",
-                "S5": "检测器告警",
-                "END": "攻击结束",
-            }[stage]
             break
-        if reason is None and ctx.t - self._step_from_t >= 2.0:
-            reason, title = "MAX", "继续推进"
-            narrative = "本段没有命中新的检查点，已推进 2 s"
         if reason is None:
-            return
+            if allow_max and ctx.t - self._step_from_t >= 2.0:
+                reason, title = "MAX", "继续推进"
+                narrative = "本段没有命中新的检查点，已推进 2 s"
+            else:
+                return None
         if reason != "MAX":
             self._stage_done.add(reason)
         events = [e for e in self.events if e["seq"] > self._step_from_seq]
         if evidence and evidence["seq"] <= self._step_from_seq:
             events = [evidence] + events
-        # 去重并按 seq 排序
         seen = set()
         uniq = []
         for e in events:
@@ -756,9 +771,10 @@ class TraceService:
         uniq.sort(key=lambda e: e["seq"])
         self._step_index += 1
         after = copy.deepcopy(self.frames)
+        prefix = attack_id or profile.id
         step = {
             "schema": "isacsim.step/1",
-            "step_id": f"{attack_id or 'A1'}:{reason}:{self._step_index}",
+            "step_id": f"{prefix}:{reason}:{self._step_index}",
             "index": self._step_index,
             "title": title,
             "reason": reason,
@@ -766,6 +782,7 @@ class TraceService:
                      "t": round(self._step_from_t, 3)},
             "to": {"seq": self.seq, "tick": self._tick, "t": round(self._t, 3)},
             "attack_id": attack_id,
+            "profile_id": profile.id,
             "stage_id": reason,
             "narrative": narrative,
             "before": self._step_before,
@@ -777,7 +794,23 @@ class TraceService:
         self.last_step = step
         self._step_mode = None
         self._pause_reason = f"checkpoint:{reason}"
-        self.sim.pause(self._pause_reason)
+        return reason
+
+    def _handle_checkpoint(self, boundary: str, ctx,
+                           *, allow_max: bool = True) -> bool:
+        if self._step_mode != "checkpoint":
+            return False
+        with self.lock:
+            reason = self._maybe_finish_step(ctx, boundary, allow_max)
+            pause_reason = self._pause_reason
+        if reason is None:
+            return False
+        if boundary == "after_tick":
+            self.sim.pause(pause_reason)
+        else:
+            # 在层边界真正停住仿真线程；resume/step/stop 负责唤醒。
+            self.sim.pause_at(pause_reason)
+        return True
 
     # ------------------------------------------------------------------
     # read API

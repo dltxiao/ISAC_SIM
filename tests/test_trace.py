@@ -110,6 +110,37 @@ def test_a1_trace_has_ghost_event_and_attack_target():
     assert any("ghost" in e.get("summary", "") for e in snap["events"])
 
 
+def test_a5_trace_step_checkpoints():
+    scene = _scene(10.0, seed=14)
+    sim = Simulation(scene, run_id="trace-a5-step",
+                     detector=ReferenceDetector(scene), trace=True)
+    th = threading.Thread(target=sim.run, daemon=True)
+    th.start()
+    try:
+        deadline = time.time() + 10
+        while sim.state != "running" and time.time() < deadline:
+            time.sleep(0.01)
+        while sim.t < 3.0 and time.time() < deadline:
+            time.sleep(0.01)
+        sim.pause("test")
+        time.sleep(0.2)
+        sim.scheduler.submit(AttackSpec(type="A5", amplitude=0.8,
+                                        duration=3.0, start=None))
+        reasons = []
+        for _ in range(8):
+            r = sim.step("checkpoint", timeout=5.0)
+            assert r["state"] == "paused"
+            step = r.get("step") or {}
+            reasons.append(step.get("reason"))
+            if step.get("reason") == "S5":
+                break
+        assert reasons[:6] == ["S0", "S1", "S2", "S3", "S4", "S5"]
+        assert step.get("profile_id") == "a5"
+    finally:
+        sim.request_stop()
+        th.join(timeout=5)
+
+
 def test_trace_step_checkpoint():
     scene = _scene(8.0, seed=14)
     sim = Simulation(scene, run_id="trace-step-test",

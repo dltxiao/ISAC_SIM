@@ -49,6 +49,7 @@ class Simulation:
         self._stop = threading.Event()
         self._paused = threading.Event()
         self._paused_ack = threading.Event()
+        self._pause_gate = threading.Condition()
         self._step_budget: int | None = None
         self._step_mode: str | None = None
         self._pause_reason: str | None = None
@@ -221,12 +222,28 @@ class Simulation:
         self.state = "paused"
         self.stats.state = "paused"
 
+    def pause_at(self, reason: str | None = None) -> bool:
+        """在层边界/调度器边界停住仿真线程，直到 resume/step/stop。
+
+        只允许由 TraceService 在安全边界调用；不能在 ctx.emit 或 SUMO 调用中调用。
+        返回 False 表示等待期间收到了 stop。
+        """
+        self.pause(reason)
+        # 让 API 的 step() 知道线程已经停在边界上。
+        self._paused_ack.set()
+        with self._pause_gate:
+            while self._paused.is_set() and not self._stop.is_set():
+                self._pause_gate.wait(0.1)
+        return not self._stop.is_set()
+
     def resume(self) -> None:
         self._step_budget = None
         self._step_mode = None
         self._pause_reason = None
         self._paused_ack.clear()
         self._paused.clear()
+        with self._pause_gate:
+            self._pause_gate.notify_all()
         self.state = "running"
         self.stats.state = "running"
 
@@ -245,6 +262,8 @@ class Simulation:
         self._step_mode = mode
         self._step_budget = max(1, int(count)) if mode == "tick" else None
         self._paused.clear()
+        with self._pause_gate:
+            self._pause_gate.notify_all()
         self.state = "running"
         self.stats.state = "running"
         deadline = time.monotonic() + float(timeout)
@@ -263,6 +282,8 @@ class Simulation:
 
     def request_stop(self) -> None:
         self._stop.set()
+        with self._pause_gate:
+            self._pause_gate.notify_all()
 
     def stop(self) -> None:
         if self.state == "stopped":
