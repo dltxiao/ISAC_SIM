@@ -105,7 +105,8 @@ class ReferenceDetector:
                     break
             self._obj_streak[key] = self._obj_streak.get(key, 0) + 1 if not confirmed else 0
             if not confirmed and self._obj_streak[key] >= 2:
-                self._alert("ghost_object", f"rsu:{sid}",
+                kind = next((s.kind for s in self.scene.sensors if s.id == sid), "rsu")
+                self._alert("ghost_object", f"{kind}:{sid}",
                             {"x": o["x"], "y": o["y"], "cls": cls}, rec.t_wall_ns)
 
     def _on_track(self, rec, p) -> None:

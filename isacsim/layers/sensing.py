@@ -125,7 +125,8 @@ class SensingLayer:
             rng_noise = 0.12 + 0.003 * true_range
             r_meas = true_range + sensor.bias_m + float(rng.normal(0.0, rng_noise))
             rv = radial_velocity(veh.vx, veh.vy, dx, dy) + float(rng.normal(0.0, 0.15))
-            snr = 32.0 - 0.045 * true_range
+            # 与 _visible() 的检测概率使用同一 SNR 口径（卡车 +3 dB 处理增益）
+            snr = 32.0 - 0.045 * true_range + (3.0 if veh.cls == "truck" else 0.0)
             rcs = 12.0 if veh.cls == "truck" else 9.0
             echo = {
                 "sensor_id": sensor.id,
@@ -210,17 +211,19 @@ class SensingLayer:
             "source_kind": sensor.kind,
             "objects": objects,
         }
-        final = ctx.emit("sensing.objects", sensor.id, f"rsu:{sensor.id}", payload, t=t)
+        final = ctx.emit("sensing.objects", sensor.id, f"{sensor.kind}:{sensor.id}", payload, t=t)
+        emitted_objects = objects if final is None else final.get("objects", [])
         if final is not None:
             self.last_objects[sensor.id] = final.get("objects", [])
             self.last_frame_t[sensor.id] = t
             ctx.extras[f"objects:{sensor.id}"] = final.get("objects", [])
 
-        ctx.emit("sensing.frame", sensor.id, f"rsu:{sensor.id}", {
+        ctx.emit("sensing.frame", sensor.id, f"{sensor.kind}:{sensor.id}", {
             "sensor_id": sensor.id,
             "coverage_id": sensor.coverage_id,
             "frame_seq": seq,
-            "object_count": len(objects),
+            # 与同一帧 sensing.objects 的目标数保持一致（含攻击注入项）
+            "object_count": len(emitted_objects),
             "clock_offset_ms": round((ts - t) * 1000.0, 3),
             "drift_ppm": sensor.drift_ppm,
         }, t=t)
