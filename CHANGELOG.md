@@ -26,6 +26,7 @@
 - **运行追踪 v1**：独立 `/trace` 页面、watch/trace 数据层、A1 S1–S5 检查点单步、SSE；见 [docs/trace/10](docs/trace/10-v1实现说明.md)。
 - **运行追踪 v2 规划**：`TraceProfile`/`WatchProvider`、S0、增量 SSE、trace.jsonl/回放、origin 与 5G 核心网融合（W7）；见 [docs/trace/11](docs/trace/11-v2完善规划.md)。
 - **`/trace` 核心网/平台 provider**：无攻击时也显示 `core:summary`、8 个核心网节点、`core:ues`、`platform:summary`；节点 health 直接进入 watch 卡片。
+- **`/trace` 核心网/平台事件**：`core.*`/`app.*`/`defense.action` 进入右侧事件栏；按 100 ms 聚合，A5 的 bot 注册洪泛不会挤掉 A1/A4 事件；`step_once()` 在 core/platform 后调用 `after_layer`。
 
 ### 文档
 
@@ -45,7 +46,7 @@
 
 ### 测试
 
-- 74 项测试通过（合并后：核心网/平台/链/追踪/Provider 等）。
+- 76 项测试通过（合并后：核心网/平台/链/追踪/Provider/事件聚合等）。
 
 ---
 
