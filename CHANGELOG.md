@@ -29,6 +29,7 @@
 - **`/trace` 核心网/平台事件**：`core.*`/`app.*`/`defense.action` 进入右侧事件栏；按 100 ms 聚合，A5 的 bot 注册洪泛不会挤掉 A1/A4 事件；`step_once()` 在 core/platform 后调用 `after_layer`。
 - **A5 单步追踪**：`TraceProfile`（A1/A5）+ S0–S5 检查点；S0 在 scheduler 后、S1/S2 在 core 后、S3 在 platform 后真正暂停；同一层边界可连续展示多个阶段。
 - **`/trace` 核心网会话/流表**：`core:sessions`（SMF `session_list`）与 `core:flows`（UPF `flow_list`）有界表格，显示 UE、DNN、5QI、TEID、路由与状态。
+- **`/trace` 平台 token/订阅表**：`platform:tokens`（IAM `token_list`）与 `platform:subscriptions`（`subscription_list`）有界表格，显示 token、租户、scopes、订阅事件与状态。
 
 ### 文档
 
