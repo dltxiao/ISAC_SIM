@@ -51,6 +51,7 @@ def create_app() -> FastAPI:
                         "t": state.get("t"), "tick": state.get("tick"),
                         "cursor": state.get("cursor")},
             "profiles": ["A1", "default"],
+            "providers": list(state.get("providers") or []),
         }
 
     @app.get("/api/trace/state")

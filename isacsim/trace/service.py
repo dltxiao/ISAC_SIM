@@ -11,6 +11,8 @@ import time
 from collections import deque
 from typing import Any
 
+from .providers import CoreProvider, PlatformProvider
+
 
 SENSOR_FIELDS = [
     {"name": "object_id", "type": "int", "width": 8},
@@ -135,7 +137,9 @@ class TraceService:
         self.last_step: dict[str, Any] | None = None
         self._pause_reason: str | None = None
 
+        self.providers: list[Any] = []
         self._build_global_targets()
+        self._build_providers()
 
     # ------------------------------------------------------------------
     # targets
@@ -166,6 +170,28 @@ class TraceService:
                      description="信道负载与链路质量", order=40)
         self._target("det:alerts", "event", "Detection", "Detector · alerts",
                      description="参考检测器的最近告警", order=50)
+
+    def _build_providers(self) -> None:
+        """注册与攻击无关的全局域 provider（当前为 Core/Platform）。"""
+        for cls in (CoreProvider, PlatformProvider):
+            provider = cls(self.sim)
+            if not provider.available():
+                continue
+            self.providers.append(provider)
+            for item in provider.targets():
+                self._target(
+                    item.id, item.kind, item.group, item.label,
+                    description=item.description, fields=item.fields,
+                    key_field=item.key_field, order=item.order,
+                )
+
+    def _update_providers(self, ctx) -> None:
+        for provider in self.providers:
+            for frame in provider.poll(ctx):
+                self._frame(
+                    frame.target_id, frame.values,
+                    summary=frame.summary, status=frame.status,
+                )
 
     def _add_attack_targets(self, inst) -> None:
         aid = inst.id
@@ -316,6 +342,7 @@ class TraceService:
             self._update_pc5(ctx)
             self._update_detector()
             self._update_scene()
+            self._update_providers(ctx)
             if self._step_mode == "checkpoint":
                 self._collect_evidence()
                 self._maybe_finish_step(ctx)
@@ -701,6 +728,7 @@ class TraceService:
                 "last_step": self._step_public(self.last_step),
                 "attacks": copy.deepcopy(self._attacks),
                 "affected": sorted(self._affected),
+                "providers": [p.id for p in self.providers],
             }
 
     def events_after(self, after: int = 0, limit: int = 200) -> list[dict]:

@@ -18,6 +18,40 @@ def _scene(seconds: float = 5.0, seed: int = 14):
     return scene
 
 
+def test_trace_core_provider_without_attack():
+    scene = _scene(4.0, seed=14)
+    sim = Simulation(scene, run_id="trace-core", detector=ReferenceDetector(scene),
+                     trace=True)
+    sim.run()
+    snap = sim.trace.snapshot()
+    assert snap["providers"] == ["core", "platform"]
+    ids = {t["id"] for t in snap["targets"]}
+    assert {"core:summary", "core:amf", "core:upf", "core:ues",
+            "platform:summary"}.issubset(ids)
+    summary = snap["frames"]["core:summary"]["values"]
+    assert summary["registered"] > 0
+    assert summary["sessions"] > 0
+    amf = snap["frames"]["core:amf"]["values"]
+    assert amf["health_status"] in ("green", "orange", "red")
+    ues = snap["frames"]["core:ues"]["values"]
+    assert ues["total"] > 0 and ues["rows"]
+    platform = snap["frames"]["platform:summary"]["values"]
+    assert platform["health_status"] in ("green", "orange", "red")
+
+
+def test_trace_core_provider_disabled():
+    scene = _scene(3.0, seed=5)
+    scene.core.enabled = False
+    sim = Simulation(scene, run_id="trace-core-off",
+                     detector=ReferenceDetector(scene), trace=True)
+    sim.run()
+    snap = sim.trace.snapshot()
+    assert snap["providers"] == ["platform"]
+    ids = {t["id"] for t in snap["targets"]}
+    assert not any(tid.startswith("core:") for tid in ids)
+    assert "platform:summary" in ids
+
+
 def test_trace_global_targets_without_attack():
     scene = _scene(3.0, seed=9)
     sim = Simulation(scene, run_id="trace-normal", detector=ReferenceDetector(scene),

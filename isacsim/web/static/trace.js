@@ -204,6 +204,9 @@
       let cls = changed.has(k) ? "changed" : "";
       if (k === "finished" && v) cls = "bad";
       if (k === "affected" && v) cls = "bad";
+      if (k === "health_status") {
+        cls = v === "green" ? "good" : v === "red" ? "bad" : "changed";
+      }
       h += `<span class="k">${esc(k)}</span><span class="v ${cls}">${esc(raw(v))}</span>`;
     }
     h += `</div>`;
