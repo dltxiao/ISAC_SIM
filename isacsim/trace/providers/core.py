@@ -13,6 +13,30 @@ CORE_UE_FIELDS = [
     {"name": "pdu_session_id", "type": "string"},
 ]
 
+CORE_SESSION_FIELDS = [
+    {"name": "session_id", "type": "string", "role": "identity"},
+    {"name": "ue_id", "type": "string"},
+    {"name": "dnn", "type": "string"},
+    {"name": "snssai", "type": "string"},
+    {"name": "upf_id", "type": "string"},
+    {"name": "ue_ip", "type": "string"},
+    {"name": "qfi", "type": "int"},
+    {"name": "five_qi", "type": "int"},
+    {"name": "gfbr_kbps", "type": "int"},
+    {"name": "state", "type": "enum"},
+]
+
+CORE_FLOW_FIELDS = [
+    {"name": "flow_id", "type": "string", "role": "identity"},
+    {"name": "ue_id", "type": "string"},
+    {"name": "session_id", "type": "string"},
+    {"name": "qfi", "type": "int"},
+    {"name": "five_qi", "type": "int"},
+    {"name": "teid", "type": "int"},
+    {"name": "route", "type": "string"},
+    {"name": "state", "type": "enum"},
+]
+
 CORE_NODES = [
     ("core:amf", "amf", "AMF", 33),
     ("core:smf", "smf", "SMF", 34),
@@ -77,6 +101,20 @@ class CoreProvider(BaseProvider):
                 fields=CORE_UE_FIELDS, key_field="ue_id", order=41,
             )
         )
+        out.append(
+            ProviderTarget(
+                "core:sessions", "table", "Core", "PDU · sessions",
+                "PDU 会话与 QoS（最多 40 条）；来源 SMF snapshot.session_list",
+                fields=CORE_SESSION_FIELDS, key_field="session_id", order=42,
+            )
+        )
+        out.append(
+            ProviderTarget(
+                "core:flows", "table", "Core", "UPF · flows",
+                "UPF 流表/TEID/路由（最多 40 条）；来源 UPF snapshot.flow_list",
+                fields=CORE_FLOW_FIELDS, key_field="flow_id", order=43,
+            )
+        )
         return out
 
     def poll(self, ctx) -> list[ProviderFrame]:
@@ -131,6 +169,30 @@ class CoreProvider(BaseProvider):
             "core:ues", {"rows": rows, "total": len(ues), "truncated": len(ues) > 40},
             summary=f"{len(ues)} UE",
         ))
+
+        smf = snap.get("smf") or {}
+        sessions = smf.get("session_list") or []
+        frames.append(ProviderFrame(
+            "core:sessions",
+            {
+                "rows": sessions[:40],
+                "total": smf.get("session_list_total", len(sessions)),
+                "truncated": bool(smf.get("session_list_truncated", len(sessions) > 40)),
+            },
+            summary=f"{smf.get('session_list_total', len(sessions))} sessions",
+        ))
+
+        upf = snap.get("upf") or {}
+        flows = upf.get("flow_list") or []
+        frames.append(ProviderFrame(
+            "core:flows",
+            {
+                "rows": flows[:40],
+                "total": upf.get("flow_list_total", len(flows)),
+                "truncated": bool(upf.get("flow_list_truncated", len(flows) > 40)),
+            },
+            summary=f"{upf.get('flow_list_total', len(flows))} flows",
+        ))
         return frames
 
 
@@ -148,7 +210,7 @@ class PlatformProvider(BaseProvider):
             ProviderTarget(
                 "platform:summary", "struct", "Platform", "V2X platform · summary",
                 "平台 IAM/订阅/Ingest/云控/审计与健康状态",
-                order=42,
+                order=44,
             )
         ]
 

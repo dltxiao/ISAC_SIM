@@ -34,6 +34,10 @@ def test_core_registration_and_session():
     snap = sim.snapshot()["core"]
     assert snap["registered"] > 0
     assert snap["sessions"] > 0
+    assert snap["smf"]["session_list"]
+    assert snap["upf"]["flow_list"]
+    assert snap["smf"]["session_list"][0]["session_id"].startswith("sess-")
+    assert snap["upf"]["flow_list"][0]["flow_id"].startswith("flow-")
 
 
 def test_core_events_carry_span():

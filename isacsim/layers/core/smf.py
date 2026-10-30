@@ -152,9 +152,31 @@ class SMF(NetworkFunction):
 
     def snapshot(self) -> dict:
         out = super().snapshot()
+        sessions = sorted(self.sessions.values(), key=lambda s: s.session_id)
+        rows = []
+        for session in sessions[:40]:
+            qos = session.qos_flows.get(1)
+            if qos is None and session.qos_flows:
+                qos = session.qos_flows[sorted(session.qos_flows)[0]]
+            rows.append({
+                "session_id": session.session_id,
+                "ue_id": session.ue_id,
+                "dnn": session.dnn,
+                "snssai": session.snssai,
+                "upf_id": session.upf_id,
+                "ue_ip": session.ue_ip,
+                "qfi": qos.qfi if qos is not None else None,
+                "five_qi": qos.five_qi if qos is not None else None,
+                "gfbr_kbps": qos.gfbr_kbps if qos is not None else None,
+                "state": session.state,
+            })
         out.update({
             "sessions": len(self.sessions),
             "active_sessions": sum(1 for s in self.sessions.values() if s.state == "ACTIVE"),
             "degraded_sessions": len(self.degraded),
+            # 有界只读列表，供 trace/Web 使用；不改变 sessions 计数语义。
+            "session_list": rows,
+            "session_list_total": len(sessions),
+            "session_list_truncated": len(sessions) > 40,
         })
         return out

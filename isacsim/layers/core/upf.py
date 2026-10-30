@@ -88,10 +88,24 @@ class UPF(NetworkFunction):
 
     def snapshot(self) -> dict:
         out = super().snapshot()
+        flows = sorted(self.flows.values(), key=lambda f: f.flow_id)
+        rows = [{
+            "flow_id": flow.flow_id,
+            "ue_id": flow.ue_id,
+            "session_id": flow.session_id,
+            "qfi": flow.qfi,
+            "five_qi": flow.five_qi,
+            "teid": flow.teid,
+            "route": flow.route,
+            "state": flow.state,
+        } for flow in flows[:40]]
         out.update({
             "flows": len(self.flows),
             "teids": len({f.teid for f in self.flows.values()}),
             "route_override": self.route_override,
             "route": self.route_override or "dn:DN-01",
+            "flow_list": rows,
+            "flow_list_total": len(flows),
+            "flow_list_truncated": len(flows) > 40,
         })
         return out
