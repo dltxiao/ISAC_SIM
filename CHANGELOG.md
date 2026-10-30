@@ -25,6 +25,7 @@
 - **开发产物清理**：`isacsim clean` 默认预览、只清 Web 会话并保留最近 N 个；`--include-batches` 显式清理批量/实验目录；自动保护正在写入的会话与 `--protect` 路径。
 - **运行追踪 v1**：独立 `/trace` 页面、watch/trace 数据层、A1 S1–S5 检查点单步、SSE；见 [docs/trace/10](docs/trace/10-v1实现说明.md)。
 - **运行追踪 v2 规划**：`TraceProfile`/`WatchProvider`、S0、增量 SSE、trace.jsonl/回放、origin 与 5G 核心网融合（W7）；见 [docs/trace/11](docs/trace/11-v2完善规划.md)。
+- **`/trace` 核心网/平台 provider**：无攻击时也显示 `core:summary`、8 个核心网节点、`core:ues`、`platform:summary`；节点 health 直接进入 watch 卡片。
 
 ### 文档
 
@@ -44,7 +45,7 @@
 
 ### 测试
 
-- 72 项测试通过（合并后：核心网/平台/链/追踪等）。
+- 74 项测试通过（合并后：核心网/平台/链/追踪/Provider 等）。
 
 ---
 
