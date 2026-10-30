@@ -418,6 +418,15 @@
       setTimeout(refresh, 250);
     }
   };
+  $("btnInjectA5").onclick = async () => {
+    const res = await post("/api/attacks", {
+      type: "A5", count: 1, amplitude: 0.8, duration: 10, start: null,
+    });
+    if (res) {
+      toast("已注入 A5（0.8 / 10s）；冻结后点“下一步”");
+      setTimeout(refresh, 250);
+    }
+  };
 
   $("searchInput").oninput = (e) => {
     state.filter = e.target.value.trim();
