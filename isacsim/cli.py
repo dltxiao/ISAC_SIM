@@ -83,6 +83,7 @@ def cmd_run(args) -> int:
     sim.run()
     if detector is not None:
         detector.dump(out / "alerts.jsonl")
+        detector.dump_chains(out / "chains.json")
     snap = sim.snapshot()
     _print({k: snap[k] for k in ("state", "sim_time", "records_total", "bytes_total",
                                  "attacks", "truth_events")})
@@ -140,6 +141,78 @@ def cmd_export(args) -> int:
     return 0
 
 
+def cmd_clean(args) -> int:
+    from .cleanup import apply_plan, build_plan, human_size
+
+    try:
+        plan = build_plan(
+            args.out,
+            keep=0 if args.all else args.keep,
+            older_than_days=args.older_than,
+            include_batches=args.include_batches,
+            all_=args.all,
+            protect=args.protect,
+        )
+    except (ValueError, OSError) as exc:
+        print(f"[isacsim] 清理失败：{exc}", file=sys.stderr)
+        return 2
+
+    result = apply_plan(plan) if args.yes else None
+    if args.json:
+        payload = {
+            "root": str(plan.root),
+            "dry_run": not args.yes,
+            "candidates": [
+                {"path": str(a.path), "kind": a.kind, "size_bytes": a.size_bytes}
+                for a in plan.candidates
+            ],
+            "kept": [
+                {"path": str(a.path), "kind": a.kind, "reason": a.reason}
+                for a in plan.kept
+            ],
+            "reclaim_bytes": plan.reclaim_bytes,
+        }
+        if result is not None:
+            payload["removed"] = result.removed
+            payload["freed_bytes"] = result.freed_bytes
+            payload["errors"] = result.errors
+        _print(payload)
+        return 1 if result and result.errors else 0
+
+    mode = "执行" if args.yes else "预览"
+    print(f"[isacsim] 清理{mode}：{plan.root}")
+    if plan.candidates:
+        for kind, label in (("web", "Web 会话"), ("batch", "批量/实验目录")):
+            group = [a for a in plan.candidates if a.kind == kind]
+            if not group:
+                continue
+            print(f"  {label}：{len(group)} 个，{human_size(sum(a.size_bytes for a in group))}")
+            for a in group[:8]:
+                print(f"    - {a.path.name}  {human_size(a.size_bytes)}")
+            if len(group) > 8:
+                print(f"    ... 另有 {len(group) - 8} 个")
+        print(f"  合计可释放：{human_size(plan.reclaim_bytes)}")
+    else:
+        print("  没有符合清理条件的产物。")
+
+    if plan.protected:
+        print("  已保护：")
+        for a in plan.protected:
+            print(f"    - {a.path.name}（{a.reason}）")
+    if plan.kept and not plan.protected:
+        print(f"  保留 {len(plan.kept)} 个最近产物。")
+
+    if result is None:
+        print("\n未删除任何文件；确认后加 --yes 执行。")
+        return 0
+    print(f"\n已删除 {result.removed} 个目录，释放 {human_size(result.freed_bytes)}。")
+    if result.errors:
+        for err in result.errors:
+            print(f"  错误：{err}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_web(args) -> int:
     from .web.api import serve
 
@@ -167,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed", type=int, default=11)
     p.add_argument("--duration", type=float, default=None)
     p.add_argument("--out", default="out")
-    p.add_argument("-a", "--attack", default=None, help="A1,A2,A3,A4 或原语，逗号分隔")
+    p.add_argument("-a", "--attack", default=None, help="A1–A10 或原语，逗号分隔")
     p.add_argument("--attack-duration", type=float, default=10.0)
     p.add_argument("--attack-start", type=float, default=3.0)
     p.add_argument("--amplitude", type=float, default=0.6)
@@ -199,6 +272,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-i", "--input", required=True, help="运行目录")
     p.add_argument("-o", "--out", required=True, help="输出目录")
     p.set_defaults(func=cmd_export)
+
+    p = sub.add_parser("clean", help="清理开发阶段运行产物（默认预览）")
+    p.add_argument("--out", default="out", help="产物根目录")
+    p.add_argument("--keep", type=int, default=3, help="每类保留最近 N 个（默认 3）")
+    p.add_argument("--include-batches", action="store_true",
+                   help="同时清理 out/ 下的批量/实验目录（默认只清 Web 会话）")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--older-than", type=float, default=None,
+                   help="只删除超过 N 天的产物")
+    g.add_argument("--all", action="store_true", help="删除选中范围内的全部产物")
+    p.add_argument("--protect", action="append", default=[], metavar="PATH",
+                   help="额外保护某个文件/目录（可重复）")
+    p.add_argument("--yes", action="store_true", help="确认执行；不加只预览")
+    p.add_argument("--json", action="store_true", help="以 JSON 输出")
+    p.set_defaults(func=cmd_clean)
 
     p = sub.add_parser("web", help="启动 Web 控制台")
     p.add_argument("--host", default="127.0.0.1")

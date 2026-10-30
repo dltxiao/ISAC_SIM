@@ -2,6 +2,8 @@
 
 产物：
 - d0.jsonl / d1.jsonl / d2.jsonl / d3a.jsonl / d3b.jsonl / d3c.jsonl
+- d4.jsonl（核心网）/ d5.jsonl（平台）/ defense.jsonl
+- chain.json（链构建器输出）
 - cam.pcapng
 - labels.json / ground-truth.csv
 - manifest.json
@@ -95,6 +97,43 @@ def export_nidd(run_dir: str | Path, out_dir: str | Path) -> dict[str, Any]:
         for rec in _iter_jsonl(run, "task.state"):
             yield {"ts": rec["ts_ns"], **rec["payload"]}
     write_jsonl("d3c.jsonl", task_rows())
+
+    # D4 核心网
+    core_streams = ("core.nas", "core.session", "core.qos",
+                    "core.handover", "core.upf", "core.nef")
+
+    def d4_rows():
+        for stream in core_streams:
+            for rec in _iter_jsonl(run, stream):
+                yield {"ts": rec["ts_ns"], "stream": stream, **rec["payload"]}
+    write_jsonl("d4.jsonl", d4_rows())
+
+    # D5 平台
+    app_streams = ("app.auth", "app.ingest", "app.subscription",
+                   "app.control", "app.audit")
+
+    def d5_rows():
+        for stream in app_streams:
+            for rec in _iter_jsonl(run, stream):
+                yield {"ts": rec["ts_ns"], "stream": stream, **rec["payload"]}
+    write_jsonl("d5.jsonl", d5_rows())
+
+    # 防御动作
+    def defense_rows():
+        for rec in _iter_jsonl(run, "defense.action"):
+            yield {"ts": rec["ts_ns"], **rec["payload"]}
+    write_jsonl("defense.jsonl", defense_rows())
+
+    # 链输出
+    chain_path = run / "chains.json"
+    if chain_path.exists():
+        try:
+            chains = json.loads(chain_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            chains = []
+        (out / "chain.json").write_text(json.dumps(chains, ensure_ascii=False, indent=2),
+                                        encoding="utf-8")
+        counts["chain"] = len(chains)
 
     # CAM → pcapng
     with PcapngWriter(out / "cam.pcapng") as w:

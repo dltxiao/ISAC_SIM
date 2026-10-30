@@ -41,6 +41,8 @@ class ReferenceDetector:
         self._bias_streak: dict[tuple[str, int], int] = defaultdict(int)
         self._resid: dict[tuple[str, int], deque] = defaultdict(lambda: deque(maxlen=6))
         self._cbr_hist: deque = deque(maxlen=30)
+        self._nas_bot: deque = deque(maxlen=400)
+        self._audit_seq = 0
         self._gnss: dict[str, tuple[float, float, float]] = {}
         self._last_alert: dict[str, float] = {}
         self.static_map = {(round(o["x"], 1), round(o["y"], 1)) for o in scene.static_objects}
@@ -78,6 +80,22 @@ class ReferenceDetector:
             self._on_link(rec, p)
         elif stream == "control.command":
             self._on_control(rec, p)
+        elif stream == "core.nas":
+            self._on_core_nas(rec, p)
+        elif stream == "core.upf":
+            self._on_core_upf(rec, p)
+        elif stream == "core.qos":
+            self._on_core_qos(rec, p)
+        elif stream == "app.ingest":
+            self._on_app_ingest(rec, p)
+        elif stream == "app.control":
+            self._on_app_control(rec, p)
+        elif stream == "app.audit":
+            self._on_app_audit(rec, p)
+        elif stream == "app.subscription":
+            self._on_app_subscription(rec, p)
+        elif stream == "core.nef":
+            self._on_core_nef(rec, p)
 
     # ---- 规则 -----------------------------------------------------------
     def _on_objects(self, rec, p) -> None:
@@ -174,6 +192,60 @@ class ReferenceDetector:
             self._alert("brake_without_hazard", f"veh:{p.get('dst', '')}",
                         {"ttc": ttc, "src": p.get("src")}, rec.t_wall_ns)
 
+    def _on_core_nas(self, rec, p) -> None:
+        if not p.get("bot") or p.get("msg_type") != "registration_request":
+            return
+        self._nas_bot.append(self.t)
+        cutoff = self.t - 1.0
+        while self._nas_bot and self._nas_bot[0] < cutoff:
+            self._nas_bot.popleft()
+        if len(self._nas_bot) >= 10:
+            self._alert("nas_registration_flood", "amf:AMF-01",
+                        {"bot_reg_per_s": len(self._nas_bot)}, rec.t_wall_ns)
+
+    def _on_core_upf(self, rec, p) -> None:
+        if p.get("msg_type") == "route_change" and p.get("route") != "dn:DN-01":
+            self._alert("upf_route_drift", p.get("upf_id", rec.entity),
+                        {"route": p.get("route")}, rec.t_wall_ns)
+
+    def _on_core_qos(self, rec, p) -> None:
+        if p.get("msg_type") == "qos_flow_modify" and int(p.get("5qi", 79)) <= 9:
+            self._alert("qos_downgrade", "smf:SMF-01",
+                        {"5qi": p.get("5qi"), "gfbr_kbps": p.get("gfbr_kbps")},
+                        rec.t_wall_ns)
+
+    def _on_app_ingest(self, rec, p) -> None:
+        if p.get("provenance") not in (None, "dn:DN-01"):
+            self._alert("ingest_provenance_mismatch", "platform:V2X-01",
+                        {"provenance": p.get("provenance")}, rec.t_wall_ns)
+        if float(p.get("latency_ms", 0.0)) >= 50.0:
+            self._alert("ingest_latency_spike", "platform:V2X-01",
+                        {"latency_ms": p.get("latency_ms")}, rec.t_wall_ns)
+
+    def _on_app_audit(self, rec, p) -> None:
+        seq = int(p.get("audit_seq", 0))
+        if self._audit_seq and seq > self._audit_seq + 1:
+            self._alert("audit_gap", "platform:V2X-01",
+                        {"from": self._audit_seq, "to": seq}, rec.t_wall_ns)
+        self._audit_seq = max(self._audit_seq, seq)
+
+    def _on_app_subscription(self, rec, p) -> None:
+        if p.get("action") == "revoke" and p.get("result") == "accept":
+            self._alert("subscription_tamper", "platform:V2X-01",
+                        {"subscription_id": p.get("subscription_id")}, rec.t_wall_ns)
+
+    def _on_core_nef(self, rec, p) -> None:
+        if p.get("msg_type") == "api_unsubscribe" and p.get("result") == "accept":
+            self._alert("nef_subscription_tamper", "nef:NEF-01",
+                        {"subscription_id": p.get("subscription_id")}, rec.t_wall_ns)
+
+    def _on_app_control(self, rec, p) -> None:
+        params = p.get("params") or {}
+        n = len(p.get("vehicle_ids") or [])
+        if p.get("result") == "accept" and (n >= 3 or params.get("replayed")):
+            self._alert("cloud_control_burst", "platform:V2X-01",
+                        {"vehicles": n, "command": p.get("command")}, rec.t_wall_ns)
+
     # ------------------------------------------------------------------
     def snapshot(self) -> dict[str, Any]:
         by_rule: dict[str, int] = defaultdict(int)
@@ -184,12 +256,28 @@ class ReferenceDetector:
             if not lat:
                 return 0.0
             return round(lat[min(len(lat) - 1, int(p * (len(lat) - 1)))], 3)
+        chains = self.chains()
         return {
             "total": len(self.alerts),
             "by_rule": dict(by_rule),
             "latency_ms": {"p50": q(0.5), "p95": q(0.95), "p99": q(0.99), "n": len(lat)},
             "recent": [a.to_dict() for a in self.alerts[-30:]],
+            "chain_count": len(chains),
+            "chains": chains[-10:],
         }
+
+    def chains(self) -> list[dict[str, Any]]:
+        from .chain import build_chains
+        return [c.to_dict() for c in build_chains(self.alerts)]
+
+    def dump_chains(self, path) -> None:
+        import json
+        from pathlib import Path
+
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(self.chains(), ensure_ascii=False, indent=2),
+                     encoding="utf-8")
 
     def dump(self, path) -> None:
         import json

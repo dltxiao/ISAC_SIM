@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .. import T0_NS
+from .ids import Trace
 
 
 class HookBus:
@@ -51,21 +52,32 @@ class SimContext:
     sumo: Any = None
     truth: Any = None
     detector: Any = None
+    trace: Trace | None = None
     extras: dict[str, Any] = field(default_factory=dict)
 
     def ts_ns(self, t: float | None = None) -> int:
         return T0_NS + int(round((self.t if t is None else t) * 1e9))
 
     def emit(self, stream: str, source: str, entity: str,
-             payload: dict[str, Any], *, t: float | None = None) -> dict[str, Any] | None:
+             payload: dict[str, Any], *, t: float | None = None,
+             trace: Trace | None = None) -> dict[str, Any] | None:
         from .records import Record
 
         payload = self.hooks.apply(stream, payload, self)
         if payload is None:
             return None
-        rec = Record(stream=stream, ts_ns=self.ts_ns(t), source=source,
-                     entity=entity, payload=payload)
+        tr = trace if trace is not None else self.trace
+        rec = Record(
+            stream=stream, ts_ns=self.ts_ns(t), source=source,
+            entity=entity, payload=payload,
+            trace_id=tr.trace_id if tr else None,
+            span_id=tr.span_id if tr else None,
+            parent_span_id=tr.parent_span_id if tr else None,
+            chain_id=tr.chain_id if tr else None,
+        )
         self.sink.emit(rec)
         if self.detector is not None:
             self.detector.on_record(rec)
+        if stream == "defense.action" and self.stats is not None:
+            self.stats.add_defense(payload)
         return payload

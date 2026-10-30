@@ -31,6 +31,7 @@ class ControlLayer:
         self.sensing = sensing
         self.rng = rng_for(scene.seed, "control:adas")
         self.pending: list[PendingBrake] = []
+        self.intents: list[dict] = []
         self.last_cmd_t: dict[str, float] = {}
         self._seq: dict[str, int] = {}
         self._braking_until: dict[str, float] = {}
@@ -39,6 +40,7 @@ class ControlLayer:
     def tick(self, ctx) -> None:
         t = ctx.t
         self._apply_pending(ctx, t)
+        self._apply_intents(ctx)
 
         vehicles = ctx.vehicles
         for v in vehicles.values():
@@ -62,6 +64,23 @@ class ControlLayer:
             if ttc >= self.TTC_THRESHOLD:
                 continue
             self._command(ctx, v, ttc, reason="ttc", source=f"adas:{v.vid}")
+
+    def _apply_intents(self, ctx) -> None:
+        """消费平台/外部下发的控制意图；下一 tick 由 ADAS 执行器落地。"""
+        intents = list(self.intents)
+        self.intents.clear()
+        intents.extend(ctx.extras.pop("control_intents", []))
+        for it in intents:
+            veh = ctx.vehicles.get(it.get("vehicle_id"))
+            if veh is None:
+                continue
+            self._command(
+                ctx, veh, ttc=99.0,
+                reason=str(it.get("reason", "cloud_control")),
+                source=str(it.get("source", "platform:V2X-01")),
+                decel=float(it.get("decel_mps2", 3.0)),
+                duration=float(it.get("duration_s", 1.2)),
+            )
 
     # ------------------------------------------------------------------
     def _find_hazard(self, veh, objects: list[dict]) -> tuple[float, dict] | None:

@@ -42,6 +42,24 @@ def create_app() -> FastAPI:
     def net() -> dict[str, Any]:
         return MANAGER.net() or {}
 
+    @app.get("/api/core")
+    def core() -> dict[str, Any]:
+        return MANAGER.snapshot().get("core") or {}
+
+    @app.get("/api/platform")
+    def platform() -> dict[str, Any]:
+        return MANAGER.snapshot().get("platform") or {}
+
+    @app.get("/api/chain")
+    def chain() -> dict[str, Any]:
+        det = MANAGER.snapshot().get("detector") or {}
+        return {"chain_count": det.get("chain_count", 0),
+                "chains": det.get("chains", [])}
+
+    @app.get("/api/defense")
+    def defense() -> dict[str, Any]:
+        return {"actions": MANAGER.snapshot().get("defense_actions", [])}
+
     @app.get("/api/runs")
     def runs() -> list[dict[str, Any]]:
         return MANAGER.runs()

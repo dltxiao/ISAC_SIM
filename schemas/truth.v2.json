@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://isacsim.local/truth.v2.json",
+  "title": "ISAC-SIM truth event v2",
+  "type": "object",
+  "required": ["event_id", "campaign", "official_type", "label", "t0", "t1", "nodes", "domains", "amplitude"],
+  "properties": {
+    "event_id": {"type": "string"},
+    "campaign": {
+      "enum": [
+        "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10",
+        "ghost_object", "range_bias", "echo_suppress", "denm_flood",
+        "jam", "id_clone", "brake_inject", "gnss_spoof"
+      ]
+    },
+    "official_type": {"type": "string"},
+    "label": {"type": "integer", "enum": [0, 1]},
+    "t0": {"type": "number"},
+    "t1": {"type": "number"},
+    "nodes": {"type": "array", "items": {"type": "string"}},
+    "domains": {"type": "array", "items": {"type": "string"}},
+    "params": {"type": "object"},
+    "amplitude": {"type": "number"},
+    "envelope": {"type": "object"},
+    "stages": {"type": "array"},
+    "causal_chain": {"type": "array", "items": {"type": "string"}},
+    "expected_evidence": {"type": "array", "items": {"type": "string"}},
+    "chain": {
+      "type": ["object", "null"],
+      "properties": {
+        "nodes": {"type": "array"},
+        "edges": {"type": "array"},
+        "stages": {"type": "array"},
+        "root_cause": {"type": ["string", "null"]},
+        "confidence": {"type": "number"}
+      }
+    },
+    "seed": {"type": "integer"},
+    "generator_version": {"type": "string"}
+  }
+}

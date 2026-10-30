@@ -30,3 +30,12 @@ def test_unknown_attack_type(client):
 
 def test_net_endpoint(client):
     assert client.get("/api/net").status_code == 200
+
+
+def test_core_platform_chain_defense_endpoints(client):
+    assert client.get("/api/core").status_code == 200
+    assert client.get("/api/platform").status_code == 200
+    chain = client.get("/api/chain").json()
+    assert "chains" in chain and "chain_count" in chain
+    defense = client.get("/api/defense").json()
+    assert "actions" in defense

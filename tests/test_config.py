@@ -21,3 +21,12 @@ def test_sensor_rate_over_step_rejected():
 def test_sensor_defaults():
     s = SensorCfg(id="R1")
     assert s.coverage_id == "R1-COV"
+
+
+def test_core_defaults_and_override():
+    s = default_scene()
+    assert s.core.enabled
+    s2 = scene_from_dict({"sensors": [{"id": "G1", "kind": "gnb"}],
+                          "core": {"enabled": False, "dnn": "v2x-test"}})
+    assert not s2.core.enabled
+    assert s2.core.dnn == "v2x-test"

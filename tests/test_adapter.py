@@ -24,6 +24,21 @@ def test_export_nidd(tmp_path):
     dump("v2x.cam", [{"sender_pseudo": "OBU-1", "msg_id": 1, "posx": 1.0, "posy": 2.0}])
     dump("sensing.objects", [{"frame_seq": 1, "sensor_id": "RSU-01", "coverage_id": "C",
                               "objects": []}])
+    dump("core.nas", [{"msg_type": "registration_request", "ue_id": "V",
+                       "result": "received"}])
+    dump("core.session", [{"msg_type": "pdu_session_establish", "ue_id": "V",
+                           "pdu_session_id": "sess-1"}])
+    dump("app.auth", [{"msg_type": "token_validate", "token_id": "tok-1",
+                       "result": "accept"}])
+    dump("app.control", [{"msg_type": "cloud_control", "command_id": "cmd-1",
+                          "vehicle_ids": ["V"], "result": "accept"}])
+    dump("defense.action", [{"layer": "core", "action": "amf_rate_limit",
+                             "target": "amf:AMF-01", "result": "applied"}])
+    (run / "chains.json").write_text(json.dumps([
+        {"chain_id": "chain-0001", "t0": 0.0, "t1": 1.0,
+         "nodes": [{"id": "amf:AMF-01"}], "edges": [], "stages": [],
+         "root_cause": "amf:AMF-01", "confidence": 0.8}
+    ]), encoding="utf-8")
     (run / "truth" / "events.jsonl").write_text(json.dumps({
         "event_id": "EVT-1", "campaign": "A1", "official_type": "x", "label": 1,
         "t0": 0.0, "t1": 1.0, "nodes": [], "domains": [], "amplitude": 0.5,
@@ -32,6 +47,11 @@ def test_export_nidd(tmp_path):
     out = tmp_path / "nidd"
     counts = export_nidd(run, out)
     assert counts["d0.jsonl"] == 1
+    assert counts["d4.jsonl"] == 2
+    assert counts["d5.jsonl"] == 2
+    assert counts["defense.jsonl"] == 1
+    assert counts["chain"] == 1
+    assert (out / "chain.json").exists()
     assert counts["cam.pcapng"] == 1
     assert (out / "labels.json").exists()
     assert (out / "cam.pcapng").read_bytes()[:4] == b"\x0a\x0d\x0d\x0a"
