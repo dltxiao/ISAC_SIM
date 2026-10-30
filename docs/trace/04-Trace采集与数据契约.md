@@ -1,45 +1,80 @@
 # 04 Trace 采集与数据契约
 
+> **当前状态（2026-10-30）**：`ctx.emit` 观察、A1/A5 StepFrame、core/app/defense 事件与 100 ms 聚合已实现；Hook before/after、origin、增量游标、trace.jsonl 未实现。
+> 本文同时保留目标契约与已实现契约；未实现项已明确标注。完整差异见 [12 当前实现状态](12-当前实现状态.md)。
+
 ## 1. 采集点
 
 Trace 不是“再写一遍仿真”，而是从现有代码的少数稳定接缝取数。
 
 | 采集点 | 代码位置 | 拿什么 | 用途 |
 |---|---|---|---|
-| 记录出口 | `SimContext.emit()`（[context.py](../../isacsim/core/context.py:59)） | post-hook 的 `Record` | 观测事实、watch 帧、事件 |
-| 注入前后 | `HookBus.apply()`（[context.py](../../isacsim/core/context.py:31)） | before/after/dropped | “攻击改了什么” |
-| tick 末尾 | `Simulation.step_once()`（[engine.py](../../isacsim/core/engine.py:107)） | 车辆、V2X、控制、检测器 | 状态类 watch |
+| 记录出口 | `SimContext.emit()`（[context.py](../../isacsim/core/context.py)） | post-hook 的 `Record` | 观测事实、watch 帧、事件 |
+| 注入前后 | `HookBus.apply()`（[context.py](../../isacsim/core/context.py)） | before/after/dropped | “攻击改了什么” |
+| tick 末尾 | `Simulation.step_once()`（[engine.py](../../isacsim/core/engine.py)） | 车辆、V2X、控制、检测器 | 状态类 watch |
 | 攻击生命周期 | `AttackScheduler` / `AttackInstance` | start/tick/stop、参数 | `atk:*`、检查点 |
 | 真值 | `TruthStore` | `TruthEvent` | 可选 `truth:*` |
 | 检测器 | `ReferenceDetector.snapshot()` | 最近告警 | `det:alerts` |
 
 > 重要：记录出口是 **post-hook**。A1 的幽灵已经被追加；检测器看到的也是这一版。`HookProbe` 额外保留 before/after，才能展示“注入动作”。
 
-## 2. 事件分类
+## 2. 事件分类（当前实现）
 
 | `kind` | 产生者 | 例子 | 是否关键事件 |
 |---|---|---|---|
-| `session.start` | TraceService | 会话开始 | 是 |
-| `session.end` | TraceService | 正常/异常结束 | 是 |
-| `attack.start` | AttackProbe | A1 选中 RSU-01 / eastbound.2 | 是 |
-| `attack.stage` | AttackProbe/Profile | 进入“首次注入” | 是 |
-| `attack.end` | AttackProbe | t1 到达 | 是 |
-| `record` | RecordProbe | `sensing.objects` 被修改后 | 可采样 |
-| `watch.delta` | Store | RSU-01.objects +3 | 是（有变化时） |
-| `hook.before` / `hook.after` | HookProbe | 3→6 objects | 是（仅关注的 hook） |
-| `hook.drop` | HookProbe | 回波被删除 | 是 |
-| `control.command` | RecordProbe | TTC 1.481 制动 | 是 |
-| `alert` | DetectorProbe | `ghost_object` | 是 |
-| `effect` | Profile/StateProbe | 速度 14.86→12.32 | 是 |
-| `step` | StepController | 第 3 步开始/结束 | 是 |
-| `trace.error` | TraceService | probe 异常/丢弃 | 是 |
-| `truth` | TruthProbe | A1 真值事件 | 可选 |
+| `attack.start` | TraceService | A1/A5 启动 | 是 |
+| `attack.end` | TraceService | t1 到达 | 是 |
+| `ghost.added` | TraceService | RSU-01 +3 ghost | 是 |
+| `control.command` | TraceService | TTC 1.481 制动 | 是 |
+| `pc5.rise` | TraceService | offered/CBR 上升 | 是（阈值标记） |
+| `vehicle.speed_drop` | TraceService | 速度 -0.5 m/s | 是 |
+| `alert` | TraceService | `ghost_object`/`core` 规则 | 是 |
+| `core.nas` / `core.session` / `core.qos` / `core.upf` / `core.handover` / `core.nef` | TraceService | 注册拒绝、PDU 失败、QoS 修改 | 是（100 ms 聚合） |
+| `app.auth` / `app.ingest` / `app.subscription` / `app.control` / `app.audit` | TraceService | token/订阅/云控 | 是（100 ms 聚合） |
+| `defense.action` | TraceService | AMF 限流、路由回切 | 是 |
+| `record.forged_denm` / `record.clone` | TraceService | A1 DENM、A4 克隆 | 是 |
 
-关键事件不允许在正常背压下丢弃；普通 `record` 可以采样。
+**规划中但未实现**：`session.start/end`、`attack.stage`、`hook.before/after/drop`、`watch.delta`、`trace.error`、`truth`。
+当前 StepFrame 的 `reason` 承担 stage 语义，没有独立 `attack.stage` 事件。
 
-## 3. 统一信封
+## 3. 当前信封
 
-所有 trace 数据带同一个信封，便于排序/重连/回放。
+当前 `TraceEvent` 实际字段：
+
+```json
+{
+  "seq": 1842,
+  "t": 3.10,
+  "tick": 62,
+  "kind": "core.nas",
+  "summary": "registration_reject reject @ amf:AMF-01 (congestion)",
+  "severity": "effect",
+  "target_id": "core:amf",
+  "attack_id": null,
+  "data": {
+    "stream": "core.nas",
+    "source": "ue:bot-0001",
+    "entity": "amf:AMF-01",
+    "msg_type": "registration_reject",
+    "result": "reject",
+    "cause": "congestion",
+    "latency_ms": 12.0,
+    "count": 1
+  }
+}
+```
+
+字段约束：
+
+- `seq`：会话内单调递增；事件和帧共用；
+- `tick` / `t`：仿真步号/秒；
+- `attack_id`：当前 core/app 事件通常为空；A1/A5 的攻击生命周期事件有值；
+- `target_id`：可空；
+- `data`：各 kind 自定义；core/app 事件带 `stream/source/entity/msg_type/result/cause/count`。
+
+**当前没有** `run_id`、`schema`、`t_wall_ns`、`namespace`、`refs`、`parent_seq` 字段。规划中的统一信封见 §3.1。
+
+### 3.1 规划信封（未实现）
 
 ```json
 {
@@ -62,69 +97,53 @@ Trace 不是“再写一遍仿真”，而是从现有代码的少数稳定接�
 }
 ```
 
-字段约束：
-
-- `seq`：会话内单调递增；所有事件/帧共用；
-- `tick`：仿真步号；`t`：仿真秒；
-- `t_wall_ns`：真实墙钟，仅诊断；**不用于排序**；
-- `namespace`：`observation` / `truth` / `system`；
-- `attack_id` / `stage_id`：可空；
-- `target_id`：可空（session 级事件）；
-- `refs.parent_seq`：因果父事件；
-- `data`：类型由 `kind` 决定。
-
-## 4. `WatchFrame` 契约
+## 4. 当前 `WatchFrame` 契约
 
 ```json
 {
-  "schema": "isacsim.watch/1",
-  "run_id": "...",
   "seq": 1842,
   "tick": 62,
   "t": 3.10,
   "target_id": "sensor:RSU-01.objects",
-  "target_version": 1,
   "status": "changed",
-  "summary": {"object_count": 6, "ghost_count": 3},
-  "values": {"rows": [], "frame_seq": 31},
-  "delta": {"mode": "previous", "added": [9000, 9001, 9002],
-            "removed": [], "changed": []},
-  "refs": {"record_seqs": [1801, 1802]}
+  "summary": "6 objects / 3 ghosts",
+  "values": {"rows": [], "object_count": 6, "ghost_count": 3, "frame_t": 3.1},
+  "delta": {"added": [9000, 9001, 9002], "removed": [], "changed": []}
 }
 ```
 
-设计规则：
+当前规则：
 
-- 每个 target 每个更新周期最多一帧；同一 tick 的多次 emit 合并；
-- `values` 只放前端需要的字段，不塞整条原始记录；
-- `delta.mode` 默认 `previous`；切换 baseline 由查询参数控制，不重写历史；
-- `refs` 指向原始事件/记录，用于“查看原始 JSON”；
-- `status=same` 可被服务端合并，不必每条 SSE 都发。
+- `TraceStore.frames[target_id]` 只保留**最新一帧**，不是每 target 600 帧历史；
+- 表 target 的 `values.rows` 有上限（sensors 80、fleet 40、core tables 40）；
+- `delta` 没有 `mode` 字段；表差异按 key 计算 added/removed/changed；
+- `status` 当前为 `new`/`changed`，没有 `same/stale/error`；
+- 规划中的 `schema`、`run_id`、`baseline`、`refs` 未实现。
 
-## 5. `StepFrame` 契约
+## 5. 当前 `StepFrame` 契约
 
 ```json
 {
   "schema": "isacsim.step/1",
-  "step_id": "ATK001:S1",
+  "step_id": "ATK001:S1:2",
   "index": 2,
   "title": "目标列表被篡改",
-  "reason": "checkpoint",
+  "reason": "S1",
   "from": {"seq": 1800, "tick": 60, "t": 3.00},
   "to": {"seq": 1842, "tick": 62, "t": 3.10},
   "attack_id": "ATK001",
+  "profile_id": "a1",
   "stage_id": "S1",
-  "narrative": "A1 向 RSU-01 的目标列表追加了 3 个静止目标",
+  "narrative": "RSU-01 +3 ghost target(s)",
   "before": {"sensor:RSU-01.objects": {"object_count": 3}},
   "after": {"sensor:RSU-01.objects": {"object_count": 6}},
   "events": [1801, 1803, 1810],
-  "alerts": [],
-  "effects": [{"veh:eastbound.2.state": {"speed": {"before": 14.86, "after": 14.42}}}],
-  "truth": null
+  "alerts": []
 }
 ```
 
-`StepFrame` 是单步 UI 的主数据；它引用事件，不重复整条 payload。`before/after` 只放差异摘要，详细值可通过 target 查询。
+实际字段：`schema`、`step_id`、`index`、`title`、`reason`、`from`、`to`、`attack_id`、`profile_id`、`stage_id`、`narrative`、`before`、`after`、`events`、`alerts`。
+**没有** `effects`、`truth`、`skipped`；`last_step`/`steps` API 只返回摘要（`event_count`/`alert_count`），完整 before/after 仍在内存。
 
 ## 6. 游标与排序
 
@@ -160,19 +179,30 @@ Trace 不是“再写一遍仿真”，而是从现有代码的少数稳定接�
 - 关键事件不合并、不丢弃；
 - 慢客户端：服务端只发最新 watch 帧，事件按 seq 补齐；`dropped_watch` 计数。
 
-### 7.3 上限
+### 7.3 当前上限
 
 | 对象 | 上限 | 超出 |
 |---|---|---|
-| 每 target 帧 | 600（60 s @10Hz） | 环形淘汰 |
-| 全局事件 | 10,000 | 淘汰最旧的非关键事件 |
-| StepFrame | 200 | 淘汰最旧 |
-| 单帧 rows | 200 | 截断 + `truncated=true` |
-| 单条 SSE | 256 KB | 截断并提示 |
+| 每 target 帧 | **只保留最新一帧** | 历史帧不保留；回放未实现 |
+| 全局事件 | 3,000 | 淘汰最旧事件（含关键事件） |
+| StepFrame | 50 | 淘汰最旧 |
+| sensor rows | 80 | 截断（客户端再显示 40） |
+| fleet rows | 40 | `truncated` |
+| core/platform 表 | 40 | `total`/`truncated` |
+| 单条 SSE | 无显式上限（全量 snapshot） | 未做裁剪 |
 
-## 8. 因果与 Xref
+> 设计中的“每 target 600 帧、事件 10k、Step 200、SSE 256 KB”未实现。
 
-### 8.1 标记来源
+## 8. 因果与 Xref（规划，未实现）
+
+当前事件没有 `origin`/`caused_by`/`refs`；A4 直接 emit、A5 core/app 事件通常 `attack_id=null`。
+当前可用的关联只有：
+
+- `TraceEvent.attack_id`（攻击生命周期、A1 ghost/control 等）；
+- `control.command` 的 `data.src`（如 `adas:<vid>`/`platform:V2X-01`）；
+- A5 `core/app` 事件的 `data.stream/source/entity/msg_type`。
+
+### 8.1 标记来源（规划）
 
 - `HookProbe` 知道 hook 的 owner（attack_id）；
 - 直接 `ctx.emit` 的攻击记录（A4、DENM 洪泛、id_clone）需要 `origin` 标记；
@@ -202,52 +232,50 @@ hook.after(ghost added)
 
 ## 9. 存储
 
-### 9.1 内存
+### 9.1 内存（当前）
 
 ```text
-TraceStore
+TraceService
 ├─ targets: dict[target_id, WatchTarget]
-├─ last: dict[target_id, WatchFrame]
-├─ frames: dict[target_id, deque[WatchFrame]]
-├─ events: deque[TraceEvent]
-├─ steps: deque[StepFrame]
-└─ counters: seq, dropped, bytes
+├─ frames: dict[target_id, WatchFrame]     # 只保留最新
+├─ events: deque[TraceEvent]               # maxlen=3000
+├─ steps: deque[StepFrame]                 # maxlen=50
+├─ last_step: StepFrame | None
+└─ providers: CoreProvider/PlatformProvider
 ```
 
-单写者/多读者；锁粒度按 store 整体即可（数据量小）。写操作只做浅拷贝/必要字段投影，避免深拷贝整条记录。
+单写者/多读者；`RLock` 保护整个服务。`snapshot()` 深拷贝 frames/events 给 API/SSE。
 
-### 9.2 落盘（可选）
+### 9.2 落盘（未实现）
 
 ```text
 out/<run>/trace/
-├─ meta.json          # run_id, schema, profiles, caps
-├─ events.jsonl       # TraceEvent
-├─ watch.jsonl        # WatchFrame（可只存变化帧）
-├─ steps.jsonl        # StepFrame
-└─ summary.json       # 计数、丢弃、耗时
+├─ meta.json          # 规划
+├─ events.jsonl       # 规划
+├─ watch.jsonl        # 规划
+├─ steps.jsonl        # 规划
+└─ summary.json       # 规划
 ```
 
-默认只在 `--trace` 或 Web 演示模式开启；批处理默认关闭。
+当前只有原生 `out/<run>/*.jsonl`（由 `sinks` 产生），**没有 trace 专用落盘**。
 
 ### 9.3 现有 run 的兼容
 
-- Web run 目前没有 `alerts.jsonl`（CLI 才有，[cli.py](../../isacsim/cli.py:66)）；
-- 回放时若没有告警文件，`det:alerts` 标为不可用，不伪造；
-- `graph.snapshot` 有 10 Hz 车辆位置，可用于回放地图（[edge.py](../../isacsim/layers/edge.py:12)）；
-- 旧 run 没有 trace 文件时，用 `ReplayAdapter` 从原始流重建。
+- Web run 目前没有 `alerts.jsonl`（CLI 才有）；
+- 回放/`ReplayAdapter` 尚未实现；当前只能看进程内快照。
 
 ## 10. 已知数据缺口
 
 这些不是 trace 层能凭空补的，设计上要显式处理：
 
-| 缺口 | 影响 | 设计处理 |
+| 缺口 | 影响 | 当前处理 |
 |---|---|---|
-| `AttackInstance.snapshot()` 没有计算后的 `rsu_id/victim/ghost_count/extra_load` | `atk:A1` 卡片信息不全 | AttackProbe 读实例字段/truth；或补 snapshot 字段 |
-| `flags` 只标真值 victim | “受影响车辆”不完整 | 从 `control.command`/速度差派生 |
+| `AttackInstance.snapshot()` 没有计算后的 `rsu_id/victim/ghost_count/extra_load` | `atk:A1` 卡片信息不全 | TraceService 读实例字段补齐 |
+| `flags` 只标真值 victim | “受影响车辆”不完整 | 从 `control.command`/速度差派生；仍有粘滞 |
 | `ctx.extras` 每 tick 重建 | A1 的 ADAS DENM/CAM 升频丢失 | trace 不依赖它；以记录/状态为准 |
-| Web run 没有 `alerts.jsonl` | 回放没有告警 | 在线时由 DetectorProbe 记录；或后续落盘 |
+| Web run 没有 `alerts.jsonl` | 回放没有告警 | 未实现回放；在线由 detector 记录 |
 | 信道是全局 `net:pc5` | 不能做 per-RSU 信道 | 只做一个 PC5 target，不虚构 |
-| `sensing.frame.object_count` 不含幽灵 | 帧计数与对象表不一致 | 以 `sensing.objects` 为准；frame 标 `derived_count` |
+| `sensing.frame.object_count` 曾不含幽灵 | 帧计数与对象表不一致 | 已修：与 post-hook `sensing.objects` 一致 |
 | `HookBus` 无 owner、`ctx.emit` 无 origin | diff 无法归因到攻击 | 加 owner/contextvar；直接 emit 打 origin |
 
 ## 11. 版本策略

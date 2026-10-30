@@ -1,6 +1,6 @@
 # ISAC-SIM：车联网跨层攻击模拟环境
 
-当前版本：**v0.3.0-dev**（见 [CHANGELOG](CHANGELOG.md)）
+当前版本：**v0.3.0**（见 [CHANGELOG](CHANGELOG.md)）
 
 单机运行的车联网（V2X）跨层攻击模拟环境：**SUMO 车流 + 自研感知/通信/认证/控制层 + 语义级 5G-A 核心网 + 跨层攻击剧本 + 独立真值 + Web 控制台 + 事件级评估**。
 
@@ -40,7 +40,7 @@ python3 -m venv .venv
 .venv/bin/python -m isacsim clean --keep 3
 ```
 
-## 运行追踪页（v1）
+## 运行追踪页（v1.2）
 
 Web 控制台启动后，打开 **`http://127.0.0.1:8080/trace`**（或点主控制台顶部的“运行追踪”）：
 
@@ -50,7 +50,8 @@ Web 控制台启动后，打开 **`http://127.0.0.1:8080/trace`**（或点主控
 - 追踪页可按 A5 的 S0–S5 单步，停在 core/platform 层边界；
 - 核心网卡片包含 UE、PDU 会话（DNN/5QI）、UPF 流表（TEID/路由），平台卡片包含 token 与订阅；
 - 点“冻结” → “注入 A1” → “下一步”，按检查点观察注入、TTC、CBR、减速、告警；
-- 第一版范围与已知限制见 [运行追踪 v1 实现说明](docs/trace/10-v1实现说明.md)。
+- “注入 A5”后按 S0–S5 观察 AMF/会话/平台/控制；
+- 第一版范围与已知限制见 [运行追踪 v1 实现说明](docs/trace/10-v1实现说明.md)；最新状态见 [当前实现状态](docs/trace/12-当前实现状态.md)。
 
 ## 组成
 
@@ -88,6 +89,7 @@ Web 控制台启动后，打开 **`http://127.0.0.1:8080/trace`**（或点主控
 - [运行追踪与单步设计](docs/trace/README.md)
 - [运行追踪 v1 实现说明](docs/trace/10-v1实现说明.md)
 - [运行追踪 v2 完善规划](docs/trace/11-v2完善规划.md)
+- [当前实现状态](docs/trace/12-当前实现状态.md)
 - [更新记录](CHANGELOG.md)
 
 ## 重要边界
