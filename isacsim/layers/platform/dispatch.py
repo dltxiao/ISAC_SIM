@@ -17,9 +17,9 @@ class Dispatcher:
     def submit(self, ctx, *, iam: IAM, audit: AuditLog, token_id: str,
                vehicle_ids: list[str], command: str,
                params: dict | None = None, ttl_s: float = 5.0,
-               trace=None) -> ControlCommand:
+               span=None) -> ControlCommand:
         params = dict(params or {})
-        ok, reason = iam.validate(ctx, token_id, "control:write", trace=trace)
+        ok, reason = iam.validate(ctx, token_id, "control:write", span=span)
         token = iam.tokens.get(token_id)
         self._seq += 1
         cmd = ControlCommand(
@@ -48,9 +48,9 @@ class Dispatcher:
             "result": result,
             "cause": None if ok else reason,
             "latency_ms": 2.0,
-        }, trace=trace)
+        }, span=span)
         audit.append(ctx, actor=f"token:{token_id}", action="control:submit",
-                     resource=f"vehicles:{len(vehicle_ids)}", result=result, trace=trace)
+                     resource=f"vehicles:{len(vehicle_ids)}", result=result, span=span)
         if not ok:
             self.rejected += 1
             return cmd
@@ -68,7 +68,7 @@ class Dispatcher:
                 "duration_s": duration,
                 "source": "platform:V2X-01",
                 "reason": "cloud_control",
-                "trace": trace,
+                "trace": span,
             })
         return cmd
 

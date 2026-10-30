@@ -17,7 +17,7 @@ class UPF(NetworkFunction):
         self._flow_seq = 0
         self.route_override: str | None = None
 
-    def set_route(self, ctx, route: str, *, trace=None) -> None:
+    def set_route(self, ctx, route: str, *, span=None) -> None:
         self.route_override = route
         for flow in self.flows.values():
             flow.route = route
@@ -27,10 +27,10 @@ class UPF(NetworkFunction):
             "flows": len(self.flows),
             "result": "applied",
             "latency_ms": self.base_latency_ms,
-        }, trace=trace)
+        }, span=span)
 
-    def restore_route(self, ctx, *, trace=None) -> None:
-        self.set_route(ctx, "dn:DN-01", trace=trace)
+    def restore_route(self, ctx, *, span=None) -> None:
+        self.set_route(ctx, "dn:DN-01", span=span)
 
     def handle(self, msg, ctx) -> None:
         if msg.msg_type == "flow_install":
@@ -68,7 +68,7 @@ class UPF(NetworkFunction):
             "route": flow.route,
             "result": "installed",
             "latency_ms": self.base_latency_ms,
-        }, trace=msg.trace)
+        }, span=msg.span)
 
     def _delete(self, msg, ctx) -> None:
         ue_id = str(msg.payload.get("ue_id", ""))
@@ -84,7 +84,7 @@ class UPF(NetworkFunction):
                     "teid": flow.teid,
                     "result": "deleted",
                     "latency_ms": self.base_latency_ms,
-                }, trace=msg.trace)
+                }, span=msg.span)
 
     def snapshot(self) -> dict:
         out = super().snapshot()

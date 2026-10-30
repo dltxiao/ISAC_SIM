@@ -12,7 +12,7 @@ class IAM:
         self.rejected = 0
 
     def issue(self, ctx, *, subject: str, tenant: str, scopes: list[str],
-              ttl_s: float, trace=None) -> PlatformToken:
+              ttl_s: float, span=None) -> PlatformToken:
         self._seq += 1
         token = PlatformToken(
             token_id=f"tok-{self._seq:04d}",
@@ -33,10 +33,10 @@ class IAM:
             "result": "accept",
             "reason": None,
             "latency_ms": 1.0,
-        }, trace=trace)
+        }, span=span)
         return token
 
-    def validate(self, ctx, token_id: str, scope: str, *, trace=None,
+    def validate(self, ctx, token_id: str, scope: str, *, span=None,
                  emit: bool = True) -> tuple[bool, str]:
         token = self.tokens.get(token_id)
         if token is None:
@@ -62,10 +62,10 @@ class IAM:
                          "result": "accept" if ok else "reject",
                          "reason": reason,
                          "latency_ms": 1.0,
-                     }, trace=trace)
+                     }, span=span)
         return ok, reason
 
-    def revoke(self, ctx, token_id: str, *, trace=None) -> bool:
+    def revoke(self, ctx, token_id: str, *, span=None) -> bool:
         token = self.tokens.get(token_id)
         if token is None:
             return False
@@ -78,7 +78,7 @@ class IAM:
             "result": "accept",
             "reason": "revoked",
             "latency_ms": 1.0,
-        }, trace=trace)
+        }, span=span)
         return True
 
     def snapshot(self) -> dict:

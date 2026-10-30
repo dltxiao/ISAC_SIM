@@ -1,14 +1,14 @@
 """NF 基类：只做计数与统一 emit，不实现协议栈。"""
 from __future__ import annotations
 
-from ...core.ids import TraceFactory
+from ...core.ids import SpanFactory
 
 
 class NetworkFunction:
     layer = "core"
 
     def __init__(self, name: str, *, capacity: float, queue_capacity: int = 1000,
-                 base_latency_ms: float = 1.0, factory: TraceFactory | None = None) -> None:
+                 base_latency_ms: float = 1.0, factory: SpanFactory | None = None) -> None:
         self.name = name
         self.capacity = float(capacity)
         self.queue_capacity = int(queue_capacity)

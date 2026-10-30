@@ -21,7 +21,7 @@ class AMF(NetworkFunction):
         self.queue_depth = 0
         self._ue_seq = 0
 
-    def set_overload(self, ctx, flag: bool, *, trace=None) -> None:
+    def set_overload(self, ctx, flag: bool, *, span=None) -> None:
         self.overloaded = bool(flag)
         self.load_hint = 0.85 if flag else 0.0
         self.queue_depth = int(self.queue_capacity * 0.85) if flag else 0
@@ -30,7 +30,7 @@ class AMF(NetworkFunction):
             "result": "enter" if flag else "clear",
             "cause": "signaling_storm" if flag else None,
             "latency_ms": self.base_latency_ms,
-        }, trace=trace)
+        }, span=span)
 
     # ------------------------------------------------------------------
     def start_registration(self, ctx, ue_id: str, gnb_id: str) -> None:
@@ -44,7 +44,7 @@ class AMF(NetworkFunction):
                 "cause": "congestion",
                 "result": "reject",
                 "latency_ms": self.base_latency_ms,
-            }, trace=tr)
+            }, span=tr)
             return
         ctx.emit("core.nas", f"ue:{ue_id}", self.entity, {
             "msg_type": "registration_request",
@@ -53,11 +53,11 @@ class AMF(NetworkFunction):
             "snssai": self.scene.core.snssai,
             "result": "received",
             "latency_ms": self.base_latency_ms,
-        }, trace=tr)
+        }, span=tr)
         self.bus.send(
             src=f"ue:{ue_id}", dst=self.entity, msg_type="registration_request",
             payload={"ue_id": ue_id, "gnb_id": gnb_id},
-            due_t=ctx.t + 0.003, trace=self.factory.child(tr),
+            due_t=ctx.t + 0.003, span=self.factory.child(tr),
         )
 
     def start_handover(self, ctx, ue_id: str, from_gnb: str, to_gnb: str) -> None:
@@ -75,7 +75,7 @@ class AMF(NetworkFunction):
             "amf_ue_ngap_id": ue.amf_ue_ngap_id,
             "result": "accept",
             "interruption_ms": 12.0,
-        }, trace=tr)
+        }, span=tr)
 
     def release(self, ctx, ue_id: str) -> None:
         ue = self.ues.pop(ue_id, None)
@@ -88,11 +88,11 @@ class AMF(NetworkFunction):
             "gnb_id": ue.gnb_id,
             "result": "accept",
             "latency_ms": self.base_latency_ms,
-        }, trace=tr)
+        }, span=tr)
         self.bus.send(
             src=self.entity, dst="smf:SMF-01", msg_type="pdu_session_release",
             payload={"ue_id": ue_id}, due_t=ctx.t + 0.003,
-            trace=self.factory.child(tr),
+            span=self.factory.child(tr),
         )
 
     # ------------------------------------------------------------------
@@ -108,12 +108,12 @@ class AMF(NetworkFunction):
                 "result": "reject",
                 "latency_ms": self.base_latency_ms,
                 "queue_depth": self.queue_capacity,
-            }, trace=msg.trace)
+            }, span=msg.span)
             return
 
         ue_id = str(msg.payload.get("ue_id", ""))
         gnb_id = str(msg.payload.get("gnb_id", ""))
-        tr = msg.trace or self.factory.new_trace()
+        tr = msg.span or self.factory.new_trace()
         auth = self.ausf.authenticate(ue_id)
         auth_tr = self.factory.child(tr)
         ctx.emit("core.nas", self.entity, self.ausf.entity, {
@@ -123,7 +123,7 @@ class AMF(NetworkFunction):
             "vector_id": auth.vector_id,
             "result": "request",
             "latency_ms": auth.latency_ms,
-        }, trace=auth_tr)
+        }, span=auth_tr)
         ctx.emit("core.nas", self.ausf.entity, self.entity, {
             "msg_type": "auth_response",
             "ue_id": ue_id,
@@ -131,7 +131,7 @@ class AMF(NetworkFunction):
             "result": "accept" if auth.ok else "reject",
             "cause": auth.cause,
             "latency_ms": auth.latency_ms,
-        }, trace=self.factory.child(auth_tr))
+        }, span=self.factory.child(auth_tr))
 
         if not auth.ok:
             self.rejected += 1
@@ -141,7 +141,7 @@ class AMF(NetworkFunction):
                 "cause": auth.cause or "auth_failed",
                 "result": "reject",
                 "latency_ms": self.base_latency_ms,
-            }, trace=tr)
+            }, span=tr)
             return
 
         self._ue_seq += 1
@@ -162,11 +162,11 @@ class AMF(NetworkFunction):
             "auth_status": "passed",
             "result": "accept",
             "latency_ms": self.base_latency_ms,
-        }, trace=accept_tr)
+        }, span=accept_tr)
         self.bus.send(
             src=self.entity, dst="smf:SMF-01", msg_type="pdu_session_establish",
             payload={"ue_id": ue_id, "gnb_id": gnb_id},
-            due_t=ctx.t + 0.004, trace=self.factory.child(accept_tr),
+            due_t=ctx.t + 0.004, span=self.factory.child(accept_tr),
         )
 
     def snapshot(self) -> dict:

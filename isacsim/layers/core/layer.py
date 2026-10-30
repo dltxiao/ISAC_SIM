@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from ...config import SceneCfg
-from ...core.ids import TraceFactory
+from ...core.ids import SpanFactory
 from ..defense import emit_defense
 from ..health import attach_health, compute_health
 from .amf import AMF
@@ -21,7 +21,7 @@ class CoreLayer:
     def __init__(self, scene: SceneCfg) -> None:
         self.scene = scene
         self.cfg = scene.core
-        self.factory = TraceFactory()
+        self.factory = SpanFactory()
         self.bus = CoreBus()
         self.udm = UDM(scene, self.factory)
         self.ausf = AUSF(scene, self.udm, self.factory)

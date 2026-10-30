@@ -42,7 +42,7 @@ class Ingest:
     def ingest(self, ctx, event: dict[str, Any], *, token_id: str,
                tenant: str, provenance: str = "dn:DN-01",
                dropped: bool = False, cause: str | None = None,
-               trace=None) -> dict[str, Any] | None:
+               span=None) -> dict[str, Any] | None:
         msg_type = self._msg_type(event)
         source = self._source(event)
         ok = self._schema_ok(event)
@@ -70,7 +70,7 @@ class Ingest:
             "cause": cause,
             "latency_ms": round(latency, 3),
         }
-        ctx.emit("app.ingest", source, "platform:V2X-01", payload, trace=trace)
+        ctx.emit("app.ingest", source, "platform:V2X-01", payload, span=span)
         return payload
 
     def snapshot(self) -> dict:

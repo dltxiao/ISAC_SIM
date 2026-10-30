@@ -11,7 +11,7 @@ class SubscriptionManager:
         self.revoked = 0
 
     def create(self, ctx, *, tenant: str, event_types: list[str],
-               callback: str, trace=None) -> Subscription:
+               callback: str, span=None) -> Subscription:
         self._seq += 1
         sub = Subscription(
             sub_id=f"sub-{self._seq:04d}",
@@ -29,10 +29,10 @@ class SubscriptionManager:
             "action": "create",
             "result": "accept",
             "latency_ms": 2.0,
-        }, trace=trace)
+        }, span=span)
         return sub
 
-    def revoke(self, ctx, sub_id: str, *, trace=None) -> bool:
+    def revoke(self, ctx, sub_id: str, *, span=None) -> bool:
         sub = self.subs.get(sub_id)
         if sub is None:
             return False
@@ -47,7 +47,7 @@ class SubscriptionManager:
             "action": "revoke",
             "result": "accept",
             "latency_ms": 2.0,
-        }, trace=trace)
+        }, span=span)
         return True
 
     def active_for(self, event_type: str) -> list[Subscription]:

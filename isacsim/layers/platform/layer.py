@@ -68,33 +68,33 @@ class PlatformLayer:
     # ------------------------------------------------------------------
     def submit_control(self, ctx, *, token_id: str, vehicle_ids: list[str],
                        command: str = "brake", params: dict | None = None,
-                       ttl_s: float = 5.0, trace=None):
+                       ttl_s: float = 5.0, span=None):
         return self.dispatcher.submit(
             ctx, iam=self.iam, audit=self.audit, token_id=token_id,
             vehicle_ids=vehicle_ids, command=command, params=params,
-            ttl_s=ttl_s, trace=trace,
+            ttl_s=ttl_s, span=span,
         )
 
     def subscribe(self, ctx, *, tenant: str, event_types: list[str],
-                  callback: str, trace=None):
+                  callback: str, span=None):
         return self.subs.create(ctx, tenant=tenant, event_types=event_types,
-                                callback=callback, trace=trace)
+                                callback=callback, span=span)
 
-    def revoke_token(self, ctx, token_id: str, *, trace=None) -> bool:
-        ok = self.iam.revoke(ctx, token_id, trace=trace)
+    def revoke_token(self, ctx, token_id: str, *, span=None) -> bool:
+        ok = self.iam.revoke(ctx, token_id, span=span)
         self.audit.append(ctx, actor="admin", action="token:revoke",
                           resource=token_id, result="accept" if ok else "reject",
-                          trace=trace)
+                          span=span)
         emit_defense(ctx, layer="app", action="platform_revoke_token",
                      target=f"token:{token_id}", result="applied" if ok else "failed",
-                     trace=trace)
+                     span=span)
         return ok
 
-    def quarantine_source(self, ctx, source: str, *, trace=None) -> dict:
+    def quarantine_source(self, ctx, source: str, *, span=None) -> dict:
         self.audit.append(ctx, actor="admin", action="source:quarantine",
-                          resource=source, result="accept", trace=trace)
+                          resource=source, result="accept", span=span)
         return emit_defense(ctx, layer="app", action="platform_quarantine_source",
-                            target=source, params={"source": source}, trace=trace)
+                            target=source, params={"source": source}, span=span)
 
     def snapshot(self) -> dict:
         elapsed = max(self._last_t, 1.0)

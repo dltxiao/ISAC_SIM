@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .. import T0_NS
-from .ids import Trace
+from .ids import SpanContext
 
 
 class HookBus:
@@ -52,7 +52,7 @@ class SimContext:
     sumo: Any = None
     truth: Any = None
     detector: Any = None
-    trace: Trace | None = None
+    span: SpanContext | None = None
     extras: dict[str, Any] = field(default_factory=dict)
 
     def ts_ns(self, t: float | None = None) -> int:
@@ -60,13 +60,13 @@ class SimContext:
 
     def emit(self, stream: str, source: str, entity: str,
              payload: dict[str, Any], *, t: float | None = None,
-             trace: Trace | None = None) -> dict[str, Any] | None:
+             span: SpanContext | None = None) -> dict[str, Any] | None:
         from .records import Record
 
         payload = self.hooks.apply(stream, payload, self)
         if payload is None:
             return None
-        tr = trace if trace is not None else self.trace
+        tr = span if span is not None else self.span
         rec = Record(
             stream=stream, ts_ns=self.ts_ns(t), source=source,
             entity=entity, payload=payload,

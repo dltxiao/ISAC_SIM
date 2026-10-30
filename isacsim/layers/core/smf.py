@@ -40,11 +40,11 @@ class SMF(NetworkFunction):
                 "cause": "congestion",
                 "result": "reject",
                 "latency_ms": self.base_latency_ms,
-            }, trace=msg.trace)
+            }, span=msg.span)
             return
         ue_id = str(msg.payload.get("ue_id", ""))
         gnb_id = str(msg.payload.get("gnb_id", ""))
-        tr = msg.trace or self.factory.new_trace()
+        tr = msg.span or self.factory.new_trace()
         self._session_seq += 1
         session = PDUSession(
             session_id=f"sess-{self._session_seq:06d}",
@@ -71,7 +71,7 @@ class SMF(NetworkFunction):
             "ue_ip": session.ue_ip,
             "result": "request",
             "latency_ms": self.base_latency_ms,
-        }, trace=tr)
+        }, span=tr)
         ctx.emit("core.session", self.entity, f"ue:{ue_id}", {
             "msg_type": "pdu_session_establish_accept",
             "ue_id": ue_id,
@@ -79,7 +79,7 @@ class SMF(NetworkFunction):
             "ue_ip": session.ue_ip,
             "result": "accept",
             "latency_ms": self.base_latency_ms,
-        }, trace=self.factory.child(tr))
+        }, span=self.factory.child(tr))
         ctx.emit("core.qos", self.entity, session.upf_id, {
             "msg_type": "qos_flow_create",
             "ue_id": ue_id,
@@ -90,15 +90,15 @@ class SMF(NetworkFunction):
             "mfbr_kbps": 2000,
             "result": "accept",
             "latency_ms": 1.0,
-        }, trace=self.factory.child(tr))
+        }, span=self.factory.child(tr))
         self.bus.send(
             src=self.entity, dst=session.upf_id, msg_type="flow_install",
             payload={"ue_id": ue_id, "session_id": session.session_id, "qfi": 1},
-            due_t=ctx.t + 0.002, trace=self.factory.child(tr),
+            due_t=ctx.t + 0.002, span=self.factory.child(tr),
         )
 
     def modify_qos(self, ctx, ue_id: str, *, five_qi: int,
-                   gfbr_kbps: int = 100, trace=None) -> bool:
+                   gfbr_kbps: int = 100, span=None) -> bool:
         session = self.sessions.get(ue_id)
         if session is None:
             return False
@@ -113,7 +113,7 @@ class SMF(NetworkFunction):
             self.degraded.add(ue_id)
         else:
             self.degraded.discard(ue_id)
-        tr = trace or self.factory.new_trace()
+        tr = span or self.factory.new_trace()
         ctx.emit("core.qos", self.entity, session.upf_id, {
             "msg_type": "qos_flow_modify",
             "ue_id": ue_id,
@@ -125,7 +125,7 @@ class SMF(NetworkFunction):
             "old_5qi": old,
             "result": "accept",
             "latency_ms": 2.0,
-        }, trace=tr)
+        }, span=tr)
         return True
 
     def _release(self, msg, ctx) -> None:
@@ -133,7 +133,7 @@ class SMF(NetworkFunction):
         session = self.sessions.pop(ue_id, None)
         if session is None:
             return
-        tr = msg.trace or self.factory.new_trace()
+        tr = msg.span or self.factory.new_trace()
         ue = self.amf.ues.get(ue_id)
         if ue is not None:
             ue.session_active = False
@@ -143,11 +143,11 @@ class SMF(NetworkFunction):
             "pdu_session_id": session.session_id,
             "result": "accept",
             "latency_ms": self.base_latency_ms,
-        }, trace=tr)
+        }, span=tr)
         self.bus.send(
             src=self.entity, dst=session.upf_id, msg_type="flow_delete",
             payload={"ue_id": ue_id, "session_id": session.session_id},
-            due_t=ctx.t + 0.002, trace=self.factory.child(tr),
+            due_t=ctx.t + 0.002, span=self.factory.child(tr),
         )
 
     def snapshot(self) -> dict:

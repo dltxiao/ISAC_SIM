@@ -25,7 +25,7 @@ class NEF(NetworkFunction):
     # ------------------------------------------------------------------
     def issue_token(self, ctx, *, subject: str, tenant: str,
                     scopes: list[str], ttl_s: float = 3600.0,
-                    trace=None) -> NefToken:
+                    span=None) -> NefToken:
         self._token_seq += 1
         token = NefToken(
             token_id=f"nef-tok-{self._token_seq:04d}",
@@ -44,7 +44,7 @@ class NEF(NetworkFunction):
             "scopes": list(scopes),
             "result": "accept",
             "latency_ms": self.base_latency_ms,
-        }, trace=trace)
+        }, span=span)
         return token
 
     def validate(self, token_id: str, scope: str, now: float) -> tuple[bool, str]:
@@ -60,7 +60,7 @@ class NEF(NetworkFunction):
         return True, "ok"
 
     def subscribe(self, ctx, *, token_id: str, event_types: list[str],
-                  callback: str, trace=None) -> NefSubscription | None:
+                  callback: str, span=None) -> NefSubscription | None:
         ok, reason = self.validate(token_id, "nef:subscribe", ctx.t)
         if not ok:
             self.rejected += 1
@@ -71,7 +71,7 @@ class NEF(NetworkFunction):
                 "result": "reject",
                 "cause": reason,
                 "latency_ms": self.base_latency_ms,
-            }, trace=trace)
+            }, span=span)
             return None
         token = self.tokens[token_id]
         self._sub_seq += 1
@@ -93,10 +93,10 @@ class NEF(NetworkFunction):
             "callback": callback,
             "result": "accept",
             "latency_ms": self.base_latency_ms,
-        }, trace=trace)
+        }, span=span)
         return sub
 
-    def unsubscribe(self, ctx, *, token_id: str, sub_id: str, trace=None) -> bool:
+    def unsubscribe(self, ctx, *, token_id: str, sub_id: str, span=None) -> bool:
         ok, reason = self.validate(token_id, "nef:subscribe", ctx.t)
         sub = self.subscriptions.get(sub_id)
         if not ok or sub is None:
@@ -108,7 +108,7 @@ class NEF(NetworkFunction):
                 "result": "reject",
                 "cause": reason if not ok else "unknown_subscription",
                 "latency_ms": self.base_latency_ms,
-            }, trace=trace)
+            }, span=span)
             return False
         sub.state = "REVOKED"
         self.unsubscribed += 1
@@ -120,10 +120,10 @@ class NEF(NetworkFunction):
             "event_types": sub.event_types,
             "result": "accept",
             "latency_ms": self.base_latency_ms,
-        }, trace=trace)
+        }, span=span)
         return True
 
-    def revoke_token(self, ctx, token_id: str, trace=None) -> bool:
+    def revoke_token(self, ctx, token_id: str, span=None) -> bool:
         token = self.tokens.get(token_id)
         if token is None:
             return False
@@ -135,7 +135,7 @@ class NEF(NetworkFunction):
             "tenant": token.tenant,
             "result": "accept",
             "latency_ms": self.base_latency_ms,
-        }, trace=trace)
+        }, span=span)
         return True
 
     def snapshot(self) -> dict:

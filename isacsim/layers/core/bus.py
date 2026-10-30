@@ -4,7 +4,7 @@ from __future__ import annotations
 import heapq
 from dataclasses import dataclass, field
 
-from ...core.ids import Trace
+from ...core.ids import SpanContext
 
 
 @dataclass(order=True)
@@ -15,7 +15,7 @@ class Message:
     dst: str = field(compare=False)
     msg_type: str = field(compare=False)
     payload: dict = field(compare=False, default_factory=dict)
-    trace: Trace | None = field(compare=False, default=None)
+    span: SpanContext | None = field(compare=False, default=None)
 
 
 class CoreBus:
@@ -24,11 +24,11 @@ class CoreBus:
         self._seq = 0
 
     def send(self, *, src: str, dst: str, msg_type: str, payload: dict,
-             due_t: float, trace: Trace | None = None) -> None:
+             due_t: float, span: SpanContext | None = None) -> None:
         self._seq += 1
         heapq.heappush(self._heap, Message(
             due_t=float(due_t), seq=self._seq, src=src, dst=dst,
-            msg_type=msg_type, payload=payload, trace=trace,
+            msg_type=msg_type, payload=payload, span=span,
         ))
 
     def dispatch(self, now: float, nfs: dict, ctx) -> int:

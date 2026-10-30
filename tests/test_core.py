@@ -1,7 +1,10 @@
 from isacsim.attacks.base import AttackSpec
 from isacsim.config import default_scene
+from isacsim.core.context import HookBus, SimContext
 from isacsim.core.engine import Simulation
+from isacsim.core.ids import SpanFactory
 from isacsim.core.records import MemorySink
+from isacsim.core.stats import RunStats
 
 
 def _run(seconds: float = 4.0, atype: str | None = None, seed: int = 3):
@@ -33,7 +36,7 @@ def test_core_registration_and_session():
     assert snap["sessions"] > 0
 
 
-def test_core_events_carry_trace():
+def test_core_events_carry_span():
     _, sink = _run(seconds=4.0)
     core = [r for r in sink.records if r.stream.startswith("core.")]
     assert core
@@ -42,6 +45,21 @@ def test_core_events_carry_trace():
     nas = [r for r in core if r.stream == "core.nas"]
     assert nas
     assert len({r.trace_id for r in nas}) >= 1
+
+
+def test_context_span_is_plumbed_to_record():
+    scene = default_scene(seed=7)
+    sink = MemorySink()
+    ctx = SimContext(
+        t=1.0, tick=20, step_s=0.05, run_id="span-test", scene=scene,
+        sink=sink, stats=RunStats(), hooks=HookBus(),
+        span=SpanFactory().new_trace(chain_id="chain-1"),
+    )
+    ctx.emit("core.nas", "amf:AMF-01", "amf:AMF-01", {"msg_type": "test"})
+    assert len(sink.records) == 1
+    rec = sink.records[0]
+    assert rec.trace_id and rec.span_id
+    assert rec.chain_id == "chain-1"
 
 
 def test_core_can_be_disabled():

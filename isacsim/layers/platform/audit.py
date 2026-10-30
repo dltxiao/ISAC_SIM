@@ -15,7 +15,7 @@ class AuditLog:
         self.suppressed = 0
 
     def append(self, ctx, *, actor: str, action: str, resource: str,
-               result: str, trace=None) -> AuditRecord | None:
+               result: str, span=None) -> AuditRecord | None:
         if not self.enabled:
             self.suppressed += 1
             return None
@@ -40,7 +40,7 @@ class AuditLog:
             "audit_seq": rec.audit_seq,
             "prev_hash": rec.prev_hash,
             "hash": rec.hash,
-        }, trace=trace)
+        }, span=span)
         self.prev_hash = digest
         return rec
 
