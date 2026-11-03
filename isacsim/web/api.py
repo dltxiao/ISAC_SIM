@@ -14,14 +14,18 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
+from ..config import ROOT
+from ..trace.profiles import profile_ids
 from .session import MANAGER, SessionError
+from .storage import StorageBusy, StorageError, StorageService
 
 STATIC = Path(__file__).resolve().parent / "static"
 
 
-def create_app() -> FastAPI:
+def create_app(storage_root: str | Path | None = None) -> FastAPI:
     app = FastAPI(title="ISAC-SIM 控制台", version=__version__)
     app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+    storage = StorageService(storage_root or (ROOT / "out"))
 
     @app.get("/")
     def index() -> FileResponse:
@@ -50,7 +54,7 @@ def create_app() -> FastAPI:
             "session": {"state": state.get("state"),
                         "t": state.get("t"), "tick": state.get("tick"),
                         "cursor": state.get("cursor")},
-            "profiles": ["A1", "default"],
+            "profiles": [*profile_ids(), "default"],
             "providers": list(state.get("providers") or []),
         }
 
@@ -137,6 +141,36 @@ def create_app() -> FastAPI:
     def runs() -> list[dict[str, Any]]:
         return MANAGER.runs()
 
+    def _protect() -> list[Path]:
+        active = MANAGER.active_run_dir()
+        return [active] if active is not None else []
+
+    @app.get("/api/storage")
+    def storage_summary() -> dict[str, Any]:
+        return storage.summary()
+
+    @app.post("/api/storage/plan")
+    def storage_plan(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+        try:
+            return storage.plan(body, protect=_protect())
+        except StorageError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/storage/cleanup")
+    def storage_cleanup(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+        if body.get("confirm") is not True:
+            raise HTTPException(400, "需要显式确认后才能删除")
+        try:
+            return storage.start(body, protect=_protect())
+        except StorageBusy as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except StorageError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get("/api/storage/cleanup")
+    def storage_cleanup_status() -> dict[str, Any]:
+        return storage.status()
+
     @app.get("/api/runs/{run_id}/download")
     def download(run_id: str) -> FileResponse:
         try:
@@ -168,10 +202,6 @@ def create_app() -> FastAPI:
     @app.post("/api/session/stop")
     def stop() -> dict[str, Any]:
         return _guard(MANAGER.stop)
-
-    @app.post("/api/session/reset")
-    def reset() -> dict[str, Any]:
-        return _guard(MANAGER.reset)
 
     @app.post("/api/session/speed")
     def speed(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:

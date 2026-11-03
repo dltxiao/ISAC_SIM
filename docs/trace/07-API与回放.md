@@ -24,8 +24,8 @@ GET  /api/trace/events?after=&limit=
 POST /api/trace/step            {"mode":"checkpoint|tick","count":1}
 GET  /api/trace/stream          SSE；cursor/状态/StepFrame 变化时发 full snapshot
 GET  /api/core  /api/platform  /api/chain  /api/defense
-POST /api/session/pause|resume|start|stop|reset
-POST /api/attacks               {"type":"A1|A5",...}
+POST /api/session/pause|resume|start|stop
+POST /api/attacks               {"type":"A1|A2|…|A10",...}
 ```
 
 未实现：`/api/trace/frames`、`/api/trace/step?id=`、`/api/trace/delta`、`/api/trace/replay/*`、`/api/trace/export`、`/api/trace/control/*`、focus/baseline。
@@ -47,7 +47,7 @@ POST /api/attacks               {"type":"A1|A5",...}
   "modes": ["live", "step_tick", "step_checkpoint"],
   "can_control": true,
   "session": {"state": "running", "t": 3.1, "tick": 62, "cursor": 1842},
-  "profiles": ["A1", "default"],
+  "profiles": ["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10", "default"],
   "providers": ["core", "platform"]
 }
 ```

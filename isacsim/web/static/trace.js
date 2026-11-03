@@ -11,15 +11,48 @@
     follow: true,
     eventCache: new Map(),
     lastKey: "",
+    tab: "overview",
+    sensorTab: null,
+    coreTab: "nodes",
+    platformTab: "summary",
   };
   let pending = null;
   let raf = 0;
   let stepBusy = false;
 
   const CAMPAIGN_NAMES = {
-    A1: "感知篡改→通信拥塞", A2: "物理欺骗+控制误导",
-    A3: "跨层隐蔽", A4: "双因素仿冒",
+    A1: "感知数据篡改→通信拥塞",
+    A2: "物理环境欺骗+控制误导",
+    A3: "跨层隐蔽（雷达渐偏）",
+    A4: "双因素仿冒",
+    A5: "5G-A 信令风暴",
+    A6: "切片/QoS 抢占",
+    A7: "UPF/N6 流量劫持",
+    A8: "NEF/订阅篡改",
+    A9: "平台越权/云控注入",
+    A10: "跨层隐蔽组合",
   };
+
+  const TABS = [
+    { id: "overview", label: "总览", groups: ["Scene", "Network", "Detection", "Defense"] },
+    { id: "sensing", label: "感知", groups: ["Sensors"] },
+    { id: "vehicles", label: "车辆", groups: ["Vehicles"] },
+    { id: "core", label: "核心网", groups: ["Core"] },
+    { id: "platform", label: "平台", groups: ["Platform"] },
+    { id: "attacks", label: "攻击", groups: ["Attacks"] },
+  ];
+  const TAB_BY_GROUP = Object.fromEntries(
+    TABS.flatMap((tab) => tab.groups.map((group) => [group, tab.id])),
+  );
+  const tabForTarget = (t) => TAB_BY_GROUP[t.group] || "overview";
+  const targetMatches = (t, q) => !q
+    || `${t.id} ${t.label} ${t.group}`.toLowerCase().includes(q);
+
+  function tabTargets(tabId) {
+    const tab = TABS.find((x) => x.id === tabId) || TABS[0];
+    return ((state.snap && state.snap.targets) || [])
+      .filter((t) => tab.groups.includes(t.group));
+  }
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -85,6 +118,7 @@
     if (key === state.lastKey) return;
     state.lastKey = key;
     renderTree();
+    renderTabs();
     renderCards();
     renderEvents();
     renderTimeline();
@@ -113,6 +147,11 @@
     $("btnTick").disabled = $("btnStep").disabled;
     $("btnPause").disabled = s.state !== "running";
     $("btnResume").disabled = s.state !== "paused";
+    const active = s.state === "running" || s.state === "paused";
+    $("btnStart").disabled = !(s.state === "idle" || s.state === "stopped" || s.state === "error");
+    $("btnStop").disabled = !active;
+    $("btnInject").disabled = !active;
+    $("btnInject").title = active ? "注入后自动暂停，点“下一步”走检查点" : "请先开始仿真";
     $("connInfo").textContent = s.enabled === false ? "追踪未启用" : "实时连接";
   }
 
@@ -121,13 +160,39 @@
     return f && f.summary ? f.summary : "—";
   }
 
+  function cardSelector(t) {
+    if (t.id.startsWith("sensor:")) return '[data-card="sensor-group"]';
+    if (t.id.startsWith("core:")) return '[data-card="core-group"]';
+    if (t.id.startsWith("platform:")) return '[data-card="platform-group"]';
+    return `[data-card="${CSS.escape(t.id)}"]`;
+  }
+
+  function focusTarget(tid) {
+    const t = ((state.snap && state.snap.targets) || []).find((x) => x.id === tid);
+    if (!t) return;
+    state.selectedTarget = tid;
+    state.tab = tabForTarget(t);
+    if (t.id.startsWith("sensor:")) state.sensorTab = t.id;
+    if (t.id.startsWith("core:")) {
+      state.coreTab = ["core:ues", "core:sessions", "core:flows"].includes(t.id)
+        ? t.id : "nodes";
+    }
+    if (t.id.startsWith("platform:")) {
+      state.platformTab = t.id === "platform:summary" ? "summary" : t.id;
+    }
+    renderTabs();
+    renderCards();
+    renderTree();
+    requestAnimationFrame(() => {
+      const card = document.querySelector(cardSelector(t));
+      if (card) card.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  }
+
   function renderTree() {
     const s = state.snap || {};
-    const targets = (s.targets || []).filter((t) => {
-      if (!state.filter) return true;
-      const q = state.filter.toLowerCase();
-      return `${t.id} ${t.label} ${t.group}`.toLowerCase().includes(q);
-    });
+    const q = state.filter.toLowerCase();
+    const targets = (s.targets || []).filter((t) => targetMatches(t, q));
     $("watchCount").textContent = String(targets.length);
     const groups = {};
     for (const t of targets) (groups[t.group] = groups[t.group] || []).push(t);
@@ -148,12 +213,7 @@
     }
     $("watchTree").innerHTML = html || `<p class="muted small">没有匹配的 target</p>`;
     $("watchTree").querySelectorAll(".watch-item").forEach((el) => {
-      el.onclick = () => {
-        state.selectedTarget = el.dataset.target;
-        renderTree();
-        const card = document.querySelector(`[data-card="${CSS.escape(el.dataset.target)}"]`);
-        if (card) card.scrollIntoView({ block: "center", behavior: "smooth" });
-      };
+      el.onclick = () => focusTarget(el.dataset.target);
     });
   }
 
@@ -225,32 +285,207 @@
     return h;
   }
 
-  function renderCards() {
+  function subTabsHTML(items, active, key) {
+    if (items.length <= 1) return "";
+    return `<div class="sub-tabs">` + items.map((it) => `
+      <button type="button" class="sub-tab ${it.value === active ? "active" : ""}"
+        data-subtab="${key}" data-value="${esc(it.value)}">${esc(it.label)}</button>
+    `).join("") + `</div>`;
+  }
+
+  function mergedCardHTML(cardId, title, tag, summary, body) {
+    return `<article class="card merged" data-card="${esc(cardId)}">
+      <div class="card-head">
+        <span class="ctitle">${esc(title)}</span>
+        <span class="tag">${esc(tag)}</span>
+        <span class="csum">${esc(summary)}</span>
+      </div>
+      <div class="card-body">${body}</div>
+    </article>`;
+  }
+
+  function singleCardHTML(t) {
     const s = state.snap || {};
-    const targets = (s.targets || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
-    const filter = state.filter.toLowerCase();
-    const cards = [];
-    for (const t of targets) {
-      if (filter && !`${t.id} ${t.label} ${t.group}`.toLowerCase().includes(filter)) continue;
-      const f = (s.frames || {})[t.id];
-      const status = f ? f.status : "empty";
-      const kindCls = t.group === "Attacks" ? "attack" : "";
-      let body = `<div class="card-empty">等待数据…</div>`;
-      if (f) {
-        if (t.kind === "table") body = tableHTML(t, f);
-        else if (t.kind === "event") body = eventHTML(t, f);
-        else body = structHTML(t, f);
-      }
-      cards.push(`<article class="card ${kindCls}" data-card="${esc(t.id)}">
-        <div class="card-head">
-          <span class="ctitle">${esc(t.label)}</span>
-          <span class="tag ${kindCls}">${esc(t.kind)}</span>
-          <span class="csum">${esc(summaryOf(f))}</span>
-        </div>
-        <div class="card-body">${body}</div>
-      </article>`);
+    const f = (s.frames || {})[t.id];
+    const kindCls = t.group === "Attacks" ? "attack" : "";
+    let body = `<div class="card-empty">等待数据…</div>`;
+    if (f) {
+      if (t.kind === "table") body = tableHTML(t, f);
+      else if (t.kind === "event") body = eventHTML(t, f);
+      else body = structHTML(t, f);
     }
-    $("cards").innerHTML = cards.join("") || `<p class="muted">暂无 target</p>`;
+    return `<article class="card ${kindCls}" data-card="${esc(t.id)}">
+      <div class="card-head">
+        <span class="ctitle">${esc(t.label)}</span>
+        <span class="tag ${kindCls}">${esc(t.kind)}</span>
+        <span class="csum">${esc(summaryOf(f))}</span>
+      </div>
+      <div class="card-body">${body}</div>
+    </article>`;
+  }
+
+  function sensorCard(targets) {
+    const s = state.snap || {};
+    const list = targets.filter((t) => t.kind === "table");
+    if (!list.length) return "";
+    if (!list.some((t) => t.id === state.sensorTab)) state.sensorTab = list[0].id;
+    const active = list.find((t) => t.id === state.sensorTab) || list[0];
+    const f = (s.frames || {})[active.id];
+    const items = list.map((t) => ({ value: t.id, label: t.label.split(" · ")[0] }));
+    const body = subTabsHTML(items, active.id, "sensorTab")
+      + `<div class="sub-body">${f ? tableHTML(active, f) : `<div class="card-empty">等待数据…</div>`}</div>`;
+    return mergedCardHTML("sensor-group", "感知 · 目标列表", "sensors",
+      `${list.length} 个传感器 · ${summaryOf(f)}`, body);
+  }
+
+  function nodeMetrics(v) {
+    const skip = new Set(["entity", "health_status", "health_score",
+      "health_reasons", "ues", "enabled"]);
+    const preferred = ["attached", "registered", "sessions", "flows",
+      "bus_pending", "queue_depth", "rejected", "received", "route",
+      "active_sessions", "degraded_sessions", "unsubscribed", "revoked"];
+    const keys = [];
+    for (const k of preferred) {
+      if (k in v && (v[k] === null || typeof v[k] !== "object")) keys.push(k);
+      if (keys.length >= 4) break;
+    }
+    if (!keys.length) {
+      for (const k of Object.keys(v)) {
+        if (skip.has(k) || v[k] === null || typeof v[k] === "object") continue;
+        keys.push(k);
+        if (keys.length >= 3) break;
+      }
+    }
+    return keys.map((k) => `<span><i>${esc(k)}</i>${esc(short(v[k]))}</span>`).join("");
+  }
+
+  function nodeChipHTML(t) {
+    const s = state.snap || {};
+    const f = (s.frames || {})[t.id];
+    const v = (f && f.values) || {};
+    const health = v.health_status || "unknown";
+    const reasons = v.health_reasons ? ` title="${esc(v.health_reasons)}"` : "";
+    const label = t.label.replace(" · node", "");
+    return `<div class="node-chip ${esc(health)}" data-node="${esc(t.id)}"${reasons}>
+      <div class="nc-head">
+        <span class="hc-dot ${esc(health)}"></span>
+        <b>${esc(label)}</b>
+        <span class="nc-h">${esc(health)}</span>
+      </div>
+      <div class="nc-metrics">${nodeMetrics(v) || `<span class="muted">${esc(summaryOf(f))}</span>`}</div>
+    </div>`;
+  }
+
+  function coreCard(targets) {
+    const s = state.snap || {};
+    const summaryT = targets.find((t) => t.id === "core:summary");
+    const nodes = targets.filter((t) => t.id !== "core:summary"
+      && t.kind === "struct" && t.id.startsWith("core:"));
+    const tables = ["core:ues", "core:sessions", "core:flows"]
+      .map((id) => targets.find((t) => t.id === id)).filter(Boolean);
+    const tableLabels = { "core:ues": "UE", "core:sessions": "会话", "core:flows": "流表" };
+    const items = [{ value: "nodes", label: "节点" }]
+      .concat(tables.map((t) => ({ value: t.id, label: tableLabels[t.id] || t.label })));
+    if (!items.some((it) => it.value === state.coreTab)) state.coreTab = "nodes";
+    const summaryF = summaryT ? (s.frames || {})[summaryT.id] : null;
+
+    let body = "";
+    if (state.coreTab === "nodes") {
+      body = (summaryT && summaryF ? structHTML(summaryT, summaryF) : "")
+        + `<div class="node-grid">${nodes.map(nodeChipHTML).join("")}</div>`;
+      if (!nodes.length && !summaryT) body = `<div class="card-empty">没有匹配的核心网节点</div>`;
+    } else {
+      const t = tables.find((x) => x.id === state.coreTab);
+      const f = t ? (s.frames || {})[t.id] : null;
+      body = t && f ? tableHTML(t, f) : `<div class="card-empty">等待数据…</div>`;
+    }
+    body = subTabsHTML(items, state.coreTab, "coreTab") + `<div class="sub-body">${body}</div>`;
+    return mergedCardHTML("core-group", "核心网 · Core", "core",
+      summaryF ? summaryOf(summaryF) : `${nodes.length} 个节点`, body);
+  }
+
+  function platformCard(targets) {
+    const s = state.snap || {};
+    const summaryT = targets.find((t) => t.id === "platform:summary");
+    const tokenT = targets.find((t) => t.id === "platform:tokens");
+    const subT = targets.find((t) => t.id === "platform:subscriptions");
+    const items = [];
+    if (summaryT) items.push({ value: "summary", label: "概览" });
+    if (tokenT) items.push({ value: tokenT.id, label: "Token" });
+    if (subT) items.push({ value: subT.id, label: "订阅" });
+    if (!items.length) return "";
+    if (!items.some((it) => it.value === state.platformTab)) {
+      state.platformTab = items[0].value;
+    }
+    const summaryF = summaryT ? (s.frames || {})[summaryT.id] : null;
+    let body;
+    if (state.platformTab === "summary") {
+      body = summaryT && summaryF ? structHTML(summaryT, summaryF)
+        : `<div class="card-empty">等待数据…</div>`;
+    } else {
+      const t = state.platformTab === tokenT?.id ? tokenT : subT;
+      const f = t ? (s.frames || {})[t.id] : null;
+      body = t && f ? tableHTML(t, f) : `<div class="card-empty">等待数据…</div>`;
+    }
+    body = subTabsHTML(items, state.platformTab, "platformTab") + `<div class="sub-body">${body}</div>`;
+    return mergedCardHTML("platform-group", "平台 · V2X", "platform",
+      summaryF ? summaryOf(summaryF) : `${items.length} 个视图`, body);
+  }
+
+  function tabCount(tabId) {
+    const n = tabTargets(tabId).length;
+    if (!n) return 0;
+    return ["sensing", "core", "platform"].includes(tabId) ? 1 : n;
+  }
+
+  function renderTabs() {
+    let active = state.tab;
+    if (!TABS.some((tab) => tab.id === active && tabCount(tab.id) > 0)) {
+      const first = TABS.find((tab) => tabCount(tab.id) > 0);
+      active = first ? first.id : TABS[0].id;
+      state.tab = active;
+    }
+    $("cardTabs").innerHTML = TABS.map((tab) => {
+      const n = tabCount(tab.id);
+      return `<button type="button" class="card-tab ${active === tab.id ? "active" : ""}"
+        data-tab="${tab.id}" ${n ? "" : "disabled"}>${tab.label}<span>${n}</span></button>`;
+    }).join("");
+    document.querySelectorAll("#cardTabs .card-tab").forEach((btn) => {
+      btn.onclick = () => {
+        state.tab = btn.dataset.tab;
+        renderTabs();
+        renderCards();
+      };
+    });
+  }
+
+  function renderCards() {
+    const q = state.filter.toLowerCase();
+    let targets = tabTargets(state.tab).filter((t) => targetMatches(t, q));
+    if (!targets.length && q) {
+      const alt = TABS.find((tab) => tabTargets(tab.id).some((t) => targetMatches(t, q)));
+      if (alt) {
+        state.tab = alt.id;
+        renderTabs();
+        targets = tabTargets(state.tab).filter((t) => targetMatches(t, q));
+      }
+    }
+    targets = targets.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+    const cards = [];
+    if (state.tab === "sensing") {
+      const card = sensorCard(targets);
+      if (card) cards.push(card);
+    } else if (state.tab === "core") {
+      const card = coreCard(targets);
+      if (card) cards.push(card);
+    } else if (state.tab === "platform") {
+      const card = platformCard(targets);
+      if (card) cards.push(card);
+    } else {
+      for (const t of targets) cards.push(singleCardHTML(t));
+    }
+    $("cards").innerHTML = cards.join("")
+      || `<p class="muted">该分组暂无匹配 target；可用左侧搜索或切换标签。</p>`;
   }
 
   // ----------------------------------------------------------- events
@@ -367,6 +602,12 @@
     e.preventDefault();
     selectEvent(Number(item.dataset.seq));
   });
+  $("cards").addEventListener("click", (e) => {
+    const btn = e.target.closest && e.target.closest("[data-subtab]");
+    if (!btn) return;
+    state[btn.dataset.subtab] = btn.dataset.value;
+    renderCards();
+  });
   $("cards").addEventListener("pointerdown", (e) => {
     const tr = e.target.closest && e.target.closest("tr[data-raw]");
     if (!tr) return;
@@ -392,6 +633,58 @@
     } catch (e) { /* ignore */ }
   }
 
+  async function startSession() {
+    const duration = Math.max(5, Math.min(600,
+      Number((state.snap && state.snap.duration_s) || 60)));
+    const res = await post("/api/session/start", {
+      seed: 11, duration, speed: 1, scene: "arterial",
+    });
+    if (res) {
+      toast(`仿真已启动（${duration}s）；点“冻结”后注入攻击`);
+      setTimeout(refresh, 300);
+    }
+  }
+
+  async function stopSession() {
+    const res = await post("/api/session/stop");
+    if (res) {
+      toast("仿真已停止");
+      setTimeout(refresh, 300);
+    }
+  }
+
+  function updateAttackHint() {
+    const type = $("attackType").value;
+    $("attackHint").textContent = CAMPAIGN_NAMES[type] || "";
+    $("amplitudeOut").textContent = Number($("attackAmplitude").value).toFixed(2);
+  }
+
+  async function injectAttack() {
+    const s = state.snap || {};
+    if (!(s.state === "running" || s.state === "paused")) {
+      toast("请先点“开始”启动仿真");
+      return;
+    }
+    const wasRunning = s.state === "running";
+    if (wasRunning) {
+      const paused = await post("/api/session/pause");
+      if (!paused) return;
+    }
+    const type = $("attackType").value;
+    const amplitude = Number($("attackAmplitude").value);
+    const duration = Math.max(1, Math.min(60,
+      Number($("attackDuration").value) || 10));
+    const res = await post("/api/attacks", {
+      type, count: 1, amplitude, duration, start: null,
+    });
+    if (res) {
+      toast(`${wasRunning ? "已暂停并注入" : "已注入"} ${type}（${amplitude.toFixed(2)} / ${duration}s）；点“下一步”从检查点开始`);
+      setTimeout(refresh, 250);
+    }
+  }
+
+  $("btnStart").onclick = startSession;
+  $("btnStop").onclick = stopSession;
   $("btnPause").onclick = async () => { await post("/api/session/pause"); refresh(); };
   $("btnResume").onclick = async () => { await post("/api/session/resume"); refresh(); };
   async function doStep(mode) {
@@ -409,28 +702,15 @@
   }
   $("btnStep").onclick = () => doStep("checkpoint");
   $("btnTick").onclick = () => doStep("tick");
-  $("btnInjectA1").onclick = async () => {
-    const res = await post("/api/attacks", {
-      type: "A1", count: 1, amplitude: 0.6, duration: 10, start: null,
-    });
-    if (res) {
-      toast("已注入 A1（0.6 / 10s）；冻结后点“下一步”");
-      setTimeout(refresh, 250);
-    }
-  };
-  $("btnInjectA5").onclick = async () => {
-    const res = await post("/api/attacks", {
-      type: "A5", count: 1, amplitude: 0.8, duration: 10, start: null,
-    });
-    if (res) {
-      toast("已注入 A5（0.8 / 10s）；冻结后点“下一步”");
-      setTimeout(refresh, 250);
-    }
-  };
+  $("btnInject").onclick = injectAttack;
+  $("attackType").onchange = updateAttackHint;
+  $("attackAmplitude").oninput = updateAttackHint;
+  updateAttackHint();
 
   $("searchInput").oninput = (e) => {
     state.filter = e.target.value.trim();
     renderTree();
+    renderTabs();
     renderCards();
   };
 

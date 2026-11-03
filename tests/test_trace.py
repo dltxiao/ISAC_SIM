@@ -4,10 +4,13 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from isacsim.attacks.base import AttackSpec
 from isacsim.config import default_scene
 from isacsim.core.engine import Simulation
 from isacsim.detect.reference import ReferenceDetector
+from isacsim.trace.profiles import PROFILES, profile_for
 
 
 def _scene(seconds: float = 5.0, seed: int = 14):
@@ -179,3 +182,105 @@ def test_trace_step_checkpoint():
     finally:
         sim.request_stop()
         th.join(timeout=5)
+
+
+PROFILE_CASES = [
+    ("A2", ("S0", "S1", "S2"), ("ghost.added", "control.command")),
+    ("A3", ("S0", "S1", "S2"), ("radar.echo", "radar.track")),
+    ("A4", ("S0", "S1", "S2"), ("v2x.cam.clone",)),
+    ("A6", ("S0", "S1", "S2"), ("v2x.cpm.forged",)),
+    ("A7", ("S0", "S1", "S2"), ("v2x.cpm.forged", "app.ingest")),
+    ("A8", ("S0", "S1", "S2"), ("core.nef", "app.subscription")),
+    ("A9", ("S0", "S1", "S2"), ("app.auth", "app.control")),
+    ("A10", ("S0", "S1", "S2"), ("radar.echo", "core.nas")),
+]
+
+
+def test_profiles_cover_a1_to_a10():
+    expected = [f"A{i}" for i in range(1, 11)]
+    assert list(PROFILES) == expected
+    for atype in expected:
+        profile = profile_for(atype)
+        assert profile.id == atype.lower()
+        assert profile.attack_types == (atype,)
+        ids = [stage.id for stage in profile.stages]
+        assert len(ids) == len(set(ids))
+        assert ids[-1] == "END"
+        assert ids[0] == ("S1" if atype == "A1" else "S0")
+
+        seen: set[str] = set()
+        for stage in profile.stages:
+            assert stage.kinds
+            assert stage.pause_at in {
+                "after_scheduler", "after_tick",
+                "after_layer:core", "after_layer:platform",
+            }
+            assert stage.wait_s >= 0.0
+            for ref in stage.wait_for:
+                assert ref in seen
+            if stage.wait_ref:
+                assert stage.wait_ref in seen
+            seen.add(stage.id)
+    assert profile_for("NOPE").id == "default"
+
+
+@pytest.mark.parametrize("atype, expected, required_kinds", PROFILE_CASES)
+def test_all_profiles_step_through_checkpoints(atype, expected, required_kinds):
+    scene = _scene(8.0, seed=14)
+    sim = Simulation(scene, run_id=f"trace-profile-{atype}",
+                     detector=ReferenceDetector(scene), trace=True)
+    th = threading.Thread(target=sim.run, daemon=True)
+    th.start()
+    try:
+        deadline = time.time() + 10
+        while sim.state != "running" and time.time() < deadline:
+            time.sleep(0.01)
+        while sim.t < 1.0 and time.time() < deadline:
+            time.sleep(0.01)
+        sim.pause("test")
+        time.sleep(0.2)
+        sim.scheduler.submit(AttackSpec(type=atype, amplitude=0.8,
+                                        duration=3.5, start=None))
+
+        steps = []
+        seen_ids = set()
+        for _ in range(24):
+            result = sim.step("checkpoint", timeout=5.0)
+            assert result["state"] in ("paused", "stopped")
+            step = result.get("step") or {}
+            step_id = step.get("step_id")
+            if step_id and step_id not in seen_ids:
+                seen_ids.add(step_id)
+                steps.append(step)
+            if step.get("reason") == "END" or result["state"] == "stopped":
+                break
+
+        reasons = [step.get("reason") for step in steps if step.get("reason") != "MAX"]
+        assert reasons[:len(expected)] == list(expected)
+        assert "END" in reasons
+        assert all(step.get("profile_id") == atype.lower() for step in steps)
+
+        kinds = {e["kind"] for e in sim.trace.events}
+        assert set(required_kinds).issubset(kinds)
+
+        if atype == "A7":
+            assert any(e["kind"] == "app.ingest"
+                       and (e.get("data") or {}).get("provenance") == "dn:EVIL-01"
+                       for e in sim.trace.events)
+        if atype == "A9":
+            assert any(e["kind"] == "app.control"
+                       and len((e.get("data") or {}).get("vehicle_ids") or []) >= 3
+                       for e in sim.trace.events)
+    finally:
+        sim.request_stop()
+        th.join(timeout=5)
+
+
+def test_radar_events_absent_without_attack():
+    scene = _scene(3.0, seed=9)
+    sim = Simulation(scene, run_id="trace-normal-radar",
+                     detector=ReferenceDetector(scene), trace=True)
+    sim.run()
+    kinds = {e["kind"] for e in sim.trace.events}
+    assert "radar.echo" not in kinds
+    assert "radar.track" not in kinds

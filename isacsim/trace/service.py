@@ -161,6 +161,7 @@ class TraceService:
         self._layer = "init"
         self._agg: dict[tuple, dict[str, Any]] = {}
         self._agg_start_t = -1.0
+        self._radar_last_tick: dict[tuple[str, str], int] = {}
 
         self.providers: list[Any] = []
         self._build_global_targets()
@@ -220,12 +221,21 @@ class TraceService:
                     summary=frame.summary, status=frame.status,
                 )
 
+    @staticmethod
+    def _victim_of(inst) -> str | None:
+        """A1/A2/A3/A5… 用 veh_id，A4 用 victim，A9 取首个 victims。"""
+        victim = getattr(inst, "veh_id", None) or getattr(inst, "victim", None)
+        if victim:
+            return victim
+        victims = getattr(inst, "victims", None) or []
+        return victims[0] if victims else None
+
     def _add_attack_targets(self, inst) -> None:
         aid = inst.id
         self._target(f"atk:{aid}", "struct", "Attacks",
                      f"{inst.atype} · {aid}",
                      description=getattr(inst, "label", ""), order=60)
-        victim = getattr(inst, "veh_id", None)
+        victim = self._victim_of(inst)
         if victim and self._victim_id is None:
             self._victim_id = victim
         if victim:
@@ -319,6 +329,39 @@ class TraceService:
                     attack_id=self._attack_for_vehicle(rec.entity.split(":", 1)[-1]),
                     t=t,
                 )
+            elif rec.stream in ("sensing.radar.echo", "sensing.radar.track"):
+                self._on_radar_record(rec)
+            elif rec.stream == "v2x.cam" and p.get("cloned"):
+                vid = str(rec.entity.split(":", 1)[-1])
+                self._event(
+                    "v2x.cam.clone",
+                    f"cloned CAM @ {vid} ({p.get('posx')}, {p.get('posy')})",
+                    data={
+                        "sender": p.get("sender_pseudo") or vid,
+                        "pseudonym": p.get("pseudonym"),
+                        "posx": p.get("posx"), "posy": p.get("posy"),
+                        "msg_id": p.get("msg_id"),
+                    },
+                    attack_id=self._attack_for_vehicle(vid),
+                    severity="effect", t=t,
+                )
+            elif rec.stream == "v2x.cpm" and (p.get("forged") or p.get("degraded")):
+                sender = p.get("sender") or p.get("sender_pseudo")
+                self._event(
+                    "v2x.cpm.forged",
+                    f"forged/degraded CPM @ {sender or rec.entity}",
+                    data={
+                        "sender": sender,
+                        "forged": bool(p.get("forged")),
+                        "degraded": bool(p.get("degraded")),
+                        "object_count": p.get("object_count"),
+                        "delay_ms": p.get("delay_ms"),
+                        "lost": p.get("lost"),
+                        "qos": p.get("qos"),
+                    },
+                    attack_id=self._attack_for_marker(sender),
+                    severity="effect", t=t,
+                )
             elif rec.stream == "defense.action" or rec.stream.startswith(DOMAIN_EVENT_STREAMS):
                 self._on_domain_record(rec)
 
@@ -326,8 +369,8 @@ class TraceService:
         """把 core.*/app.*/defense.* 投影成 TraceEvent，并按 100 ms 聚合。
 
         A5 每秒可产生约 2000 条 core.nas；若逐条入 ring，几秒内就会挤掉
-        A1/A4 的关键事件。这里按 (stream,msg_type,result,cause,target) 聚合并
-        在事件 data 里保留 count，首条仍可定位时间与 entity。
+        A1/A4 的关键事件。这里按 (stream,msg_type,result,cause,provenance,
+        action,target) 聚合并保留首条时间与关键字段，data.count 累加。
         """
         p = rec.payload
         stream = rec.stream
@@ -347,7 +390,8 @@ class TraceService:
         if self._t - self._agg_start_t >= 0.1 - 1e-9:
             self._agg.clear()
             self._agg_start_t = self._t
-        key = (stream, msg_type, str(result), str(cause), target or "")
+        key = (stream, msg_type, str(result), str(cause),
+               str(p.get("provenance")), str(p.get("action")), target or "")
         entry = self._agg.get(key)
         if entry is not None:
             entry["count"] += 1
@@ -356,20 +400,83 @@ class TraceService:
             event["summary"] = f"{entry['summary']} ×{entry['count']}"
             return
 
+        data = {
+            "stream": stream, "source": rec.source, "entity": rec.entity,
+            "msg_type": msg_type, "result": result, "cause": cause,
+            "latency_ms": p.get("latency_ms"), "count": 1,
+        }
+        # profile 判定所需的语义字段；保持白名单，避免把整条 payload 塞进 ring。
+        for field in ("provenance", "token_id", "tenant", "vehicle_ids",
+                      "command", "action", "subscription_id", "event_types",
+                      "actor", "5qi", "old_5qi", "route", "bot", "ue_id"):
+            if field in p:
+                data[field] = p[field]
         event = self._event(
-            stream, summary,
-            data={
-                "stream": stream, "source": rec.source, "entity": rec.entity,
-                "msg_type": msg_type, "result": result, "cause": cause,
-                "latency_ms": p.get("latency_ms"), "count": 1,
-            },
-            target_id=target, severity="effect",
+            stream, summary, data=data, target_id=target, severity="effect",
         )
         self._agg[key] = {"event": event, "count": 1, "summary": summary}
 
+    def _profile_watches(self, *kinds: str) -> bool:
+        """当前 profile 是否声明了这些事件类型；用于雷达等高频流门控。"""
+        profile = self._profile
+        if profile is None:
+            return False
+        wanted = set(kinds)
+        return any(wanted.intersection(stage.kinds) for stage in profile.stages)
+
+    def _on_radar_record(self, rec) -> None:
+        """把 A3/A10 受害者车的雷达样本低频投影成事件。
+
+        雷达每帧、每传感器都会产生 echo/track；只保留当前 tick 的第一条，
+        避免 4 个传感器 × 多车 × 10 Hz 淹没事件 ring，也不改变原始流。
+        """
+        payload = rec.payload or {}
+        entity = str(payload.get("entity") or rec.entity)
+        if not entity.startswith("veh:"):
+            return
+        vid = entity.split(":", 1)[-1]
+        if not self._profile_watches("radar.echo", "radar.track"):
+            return
+        attack_id = self._attack_for_vehicle(vid)
+        if attack_id is None:
+            return
+        key = (rec.stream, vid)
+        if self._radar_last_tick.get(key) == self._tick:
+            return
+        self._radar_last_tick[key] = self._tick
+        kind = "radar.echo" if rec.stream.endswith("echo") else "radar.track"
+        self._event(
+            kind,
+            f"{kind} {payload.get('range_m')} m @ {vid}",
+            data={
+                "sensor_id": payload.get("sensor_id"),
+                "entity": entity,
+                "range_m": payload.get("range_m"),
+                "radial_vel_mps": payload.get("radial_vel_mps"),
+                "frame_seq": payload.get("frame_seq"),
+                "source_stream": rec.stream,
+            },
+            attack_id=attack_id, severity="effect", t=self.sim.t,
+        )
+
+    def _attack_for_marker(self, marker) -> str | None:
+        """按 ATK-A6 / attacker:A6 / A6 之类的标记找活动攻击。"""
+        text = str(marker or "")
+        if not text:
+            return None
+        for inst in self.sim.scheduler.instances:
+            if getattr(inst, "finished", False):
+                continue
+            atype = str(getattr(inst, "atype", ""))
+            if text in (atype, f"ATK-{atype}", f"attacker:{atype}"):
+                return inst.id
+        return None
+
     def _attack_for_vehicle(self, vid: str) -> str | None:
         for inst in self.sim.scheduler.instances:
-            if getattr(inst, "veh_id", None) == vid and not getattr(inst, "finished", False):
+            if getattr(inst, "finished", False):
+                continue
+            if self._victim_of(inst) == vid or vid in (getattr(inst, "victims", None) or []):
                 return inst.id
         return None
 
@@ -379,8 +486,10 @@ class TraceService:
                 continue
             if entity.startswith("rsu:") and getattr(inst, "rsu_id", None) == entity[4:]:
                 return inst.id
-            if entity.startswith("veh:") and getattr(inst, "veh_id", None) == entity[4:]:
-                return inst.id
+            if entity.startswith("veh:"):
+                vid = entity[4:]
+                if self._victim_of(inst) == vid or vid in (getattr(inst, "victims", None) or []):
+                    return inst.id
         return None
 
     # ------------------------------------------------------------------
@@ -451,6 +560,7 @@ class TraceService:
         self._speed_drop.clear()
         self._drop_reported.clear()
         self._last_cmd.clear()
+        self._radar_last_tick.clear()
         pc5 = self.frames.get("net:pc5")
         if pc5:
             vals = pc5.get("values") or {}
@@ -471,7 +581,7 @@ class TraceService:
                 "target": snap.get("target"),
                 "params": snap.get("params") or {},
                 "rsu": getattr(inst, "rsu_id", None),
-                "victim": getattr(inst, "veh_id", None),
+                "victim": self._victim_of(inst),
                 "ghost_count": len(getattr(inst, "ghosts", []) or []),
                 "extra_load": getattr(inst, "extra_load", None),
             }
@@ -742,7 +852,10 @@ class TraceService:
                 missing = [x for x in stage.wait_for if x not in self._stage_done]
                 if missing:
                     ref = self._evidence.get(stage.wait_ref or "")
-                    if ref is not None and self._t - float(ref.get("t", 0.0)) < stage.wait_s:
+                    # 参考阶段尚未出现时必须等待，不能用 None 绕过顺序约束。
+                    if ref is None:
+                        continue
+                    if self._t - float(ref.get("t", 0.0)) < stage.wait_s:
                         continue
             reason = stage.id
             title = stage.title

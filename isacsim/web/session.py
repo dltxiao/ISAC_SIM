@@ -23,7 +23,6 @@ class SessionManager:
         self.lock = threading.RLock()
         self.sim: Simulation | None = None
         self.thread: threading.Thread | None = None
-        self.params: dict[str, Any] = {}
         self.run_dir: Path | None = None
 
     # ------------------------------------------------------------------
@@ -31,7 +30,7 @@ class SessionManager:
               duration: float = 60.0, scene: str = "arterial") -> dict[str, Any]:
         with self.lock:
             if self.thread is not None and self.thread.is_alive():
-                raise SessionError("已有会话在运行，请先停止或复位")
+                raise SessionError("已有会话在运行，请先停止")
             scn = default_scene(seed=seed)
             scn.name = scene
             scn.duration_s = float(duration)
@@ -44,8 +43,6 @@ class SessionManager:
                              realtime=True, speed=speed, trace=True)
             self.sim = sim
             self.run_dir = out
-            self.params = {"seed": seed, "speed": speed, "duration": duration,
-                           "scene": scene}
             self.thread = threading.Thread(target=sim.run, name="isacsim-sim", daemon=True)
             self.thread.start()
             return self.snapshot()
@@ -71,21 +68,11 @@ class SessionManager:
                 self.thread.join(timeout=8)
             return self.snapshot()
 
-    def reset(self) -> dict[str, Any]:
-        params = dict(self.params)
-        with self.lock:
-            if self.sim is not None:
-                self.sim.request_stop()
-                if self.thread is not None:
-                    self.thread.join(timeout=8)
-        return self.start(**params) if params else self.start()
-
     def set_speed(self, speed: float) -> dict[str, Any]:
         if self.sim is None:
             raise SessionError("没有会话")
         self.sim.speed = max(0.25, min(8.0, float(speed)))
         self.sim.stats.speed = self.sim.speed
-        self.params["speed"] = self.sim.speed
         return self.snapshot()
 
     # ------------------------------------------------------------------
@@ -145,6 +132,14 @@ class SessionManager:
 
     def net(self) -> dict[str, Any] | None:
         return self.sim.net_json() if self.sim is not None else None
+
+    def active_run_dir(self) -> Path | None:
+        """正在写入的运行目录；清理历史数据时必须保护。"""
+        if self.sim is None or self.run_dir is None:
+            return None
+        if self.sim.state in ("running", "paused", "starting"):
+            return self.run_dir
+        return None
 
     def hardware(self) -> dict[str, Any]:
         hw = hardware_info()

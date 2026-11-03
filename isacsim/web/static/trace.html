@@ -26,15 +26,40 @@
   </div>
 
   <div class="trace-actions">
+    <button id="btnStart" class="primary">开始</button>
     <button id="btnPause">冻结</button>
     <button id="btnResume">继续</button>
+    <button id="btnStop" class="danger">停止</button>
     <button id="btnStep" class="primary">下一步</button>
     <button id="btnTick">tick 步</button>
-    <button id="btnInjectA1">注入 A1</button>
-    <button id="btnInjectA5">注入 A5</button>
     <a class="backlink" href="/">主控制台</a>
   </div>
 </header>
+
+<div class="trace-injectbar">
+  <span class="inject-label">攻击注入</span>
+  <select id="attackType" aria-label="攻击类型">
+    <option value="A1" selected>A1 · 感知数据篡改→通信拥塞</option>
+    <option value="A2">A2 · 物理环境欺骗+控制误导</option>
+    <option value="A3">A3 · 跨层隐蔽（雷达渐偏）</option>
+    <option value="A4">A4 · 双因素仿冒</option>
+    <option value="A5">A5 · 5G-A 信令风暴</option>
+    <option value="A6">A6 · 切片/QoS 抢占</option>
+    <option value="A7">A7 · UPF/N6 流量劫持</option>
+    <option value="A8">A8 · NEF/订阅篡改</option>
+    <option value="A9">A9 · 平台越权/云控注入</option>
+    <option value="A10">A10 · 跨层隐蔽组合</option>
+  </select>
+  <span id="attackHint" class="inject-hint muted small">感知数据篡改→通信拥塞</span>
+  <label class="inject-field">强度
+    <input id="attackAmplitude" type="range" min="0.1" max="1" step="0.1" value="0.8"/>
+    <b id="amplitudeOut">0.80</b>
+  </label>
+  <label class="inject-field">时长
+    <input id="attackDuration" type="number" min="1" max="60" step="1" value="10" style="width:58px"/> s
+  </label>
+  <button id="btnInject" class="primary">注入</button>
+</div>
 
 <main class="trace-layout">
   <aside class="trace-left">
@@ -53,6 +78,7 @@
       <div class="step-title">连续运行</div>
       <div class="step-sub muted">注入攻击后，点“下一步”在检查点暂停。</div>
     </div>
+    <div id="cardTabs" class="card-tabs"></div>
     <div id="cards" class="cards">
       <p class="muted">等待仿真数据…</p>
     </div>

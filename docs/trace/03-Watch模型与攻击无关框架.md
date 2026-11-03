@@ -1,7 +1,7 @@
 # 03 Watch 模型与攻击无关框架
 
-> **当前状态（2026-10-30）**：`WatchTarget/WatchFrame/TraceEvent` 的概念已落地；`WatchProvider` 已用于 Core/Platform；`TraceProfile` 当前是 Python `StageSpec`（kind/predicate/pause_at），A1/A5 已接入。
-> `TraceProfile.targets/narrative`、声明式 DSL、A2–A4/A6–A10 profile、truth 仍为设计。差异见 [12 当前实现状态](12-当前实现状态.md)。
+> **当前状态（2026-11-02）**：`WatchTarget/WatchFrame/TraceEvent` 的概念已落地；`WatchProvider` 已用于 Core/Platform；`TraceProfile` 当前是 Python `StageSpec`（kind/predicate/pause_at），A1–A10 已接入。
+> `TraceProfile.targets/narrative`、声明式 DSL、truth 仍为设计。差异见 [12 当前实现状态](12-当前实现状态.md)。
 
 ## 1. 为什么需要一层 Watch 模型
 
@@ -242,47 +242,52 @@ class TraceProfile:
 - 没有 S0；第一步 S1 已包含注入后的状态；
 - 讲解重点：目标 RSU vs 其他 RSU 的对照。
 
-### 5.2 A2
+### 5.2 A2（已实现）
 
-- 额外目标：目标 RSU 的 `objects`（stop_sign）、`veh:<victim>.state`（brake）、`net:pc5`（jam/PER）；
-- 检查点：伪造停止牌 → 注入制动 → 链路干扰 → 急刹；
-- 复用同一套表格/标量渲染。
+- 额外证据：目标 RSU 的 `objects`（stop_sign）、`control.command`（injected）、`pc5.rise`、`vehicle.speed_drop`；
+- 检查点：S0 启动 → S1 停止牌 → S2 注入制动 → S3 链路干扰 → S4 急刹 → S5 告警 → END；
+- S2 之后的链路/减速阶段用 `wait_for` 保证展示顺序。
 
-### 5.3 A3
+### 5.3 A3（已实现）
 
-- 额外目标：`sensing.radar.echo`（目标车）、`sensing.radar.track`、`control.command`；
-- 检查点：回波偏置开始 → 点迹偏移 → 60% 小指令 → 目标列表仍正常；
-- 需要“series”渲染看偏置随时间变化。
+- 额外事件：`radar.echo`、`radar.track`、`control.command`；
+- 检查点：S0 启动 → S1 回波偏移 → S2 点迹偏移 → S3 60% 处小指令 → S4 轻微减速 → S5 告警 → END；
+- 雷达事件按受害者车每 tick 采样，不代表检测阈值；偏置随时间增长，暂不做 series 图。
 
-### 5.4 A4
+### 5.4 A4（已实现）
 
-- 额外目标：`auth.cert`、`auth.fingerprint`、`v2x.cam`（克隆）、`veh:<victim>.state`；
-- 检查点：证书克隆 → 指纹复制 → 伪 CAM → 位置跳变告警。
+- 额外事件：`record.clone`（auth.cert/auth.fingerprint）、`v2x.cam.clone`、`alert`；
+- 检查点：S0 启动 → S1 克隆标识 → S2 复制指纹 → S3 伪 CAM → S4 位置跳变告警 → END；
+- A4 的 `victim` 现在也会注册 `veh:<victim>.state` target，并参与事件归因。
 
-### 5.5 A5（已实现）与 A6–A10（future）
+### 5.5 A5–A10（已实现）
 
-A5 已实现：
+A5 保持原有 S0–S5；A6–A10 的阶段与暂停边界：
 
-- 全局目标：`core:*`、`platform:*`（由 provider 注册，不是 A5 profile 私有）；
-- 检查点：S0 攻击启动 → S1 AMF 过载/拒绝 → S2 PDU 会话失败 → S3 平台 Ingest/云控 → S4 远控/物理后果 → S5 告警 → END；
-- S1/S2 在 `after_layer:core`、S3 在 `after_layer:platform` 暂停；
-- 前端仍用 `struct/table/event` 渲染器，未改前端。
+| 攻击 | 检查点 | 关键暂停边界 |
+|---|---|---|
+| A5 | S0 启动 → S1 AMF → S2 PDU → S3 平台 → S4 远控 → S5 告警 → END | scheduler/core/platform/tick |
+| A6 | S0 启动 → S1 5QI 降级 → S2 CPM 降级 → S3 Ingest 延迟 → S4 云控 → S5 告警 → END | scheduler/core/platform/tick |
+| A7 | S0 启动 → S1 UPF 路由改向 → S2 伪造 CPM → S3 云控 → S4 告警 → END | scheduler/core/platform/tick |
+| A8 | S0 启动 → S1 NEF 退订 → S2 平台退订 → S3 漏事件 → S4 云控 → S5 告警 → END | scheduler/core/platform/tick |
+| A9 | S0 启动 → S1 Token 复用 → S2 批量云控 → S3 控制到车 → S4 多车减速 → S5 告警 → END | scheduler/platform/tick |
+| A10 | S0 启动 → S1 雷达渐偏 → S2 轻度信令 → S3 审计抑制 → S4 小幅制动 → S5 告警 → END | scheduler/core/platform/tick |
 
-A6–A10 仍需按同样方式补 profile；当前没有专用检查点。
+A6/A7/A8/A9/A10 的关键证据来自 `core.*`、`app.*`（含新增的 `v2x.cpm.forged`）；全局 target 仍由 provider 注册，profile 不拥有全局 target。
 
 ### 5.6 新增一个攻击的接入步骤（当前方式）
 
-以 A2 为例，当前代码的实际做法：
+以 A2 为例：
 
 1. 在 `isacsim/trace/profiles.py` 增加 `StageSpec` 列表；
 2. 用 `kinds` + 可选 `predicate` 匹配现有 `TraceEvent`；
 3. 设置 `pause_at`（`after_scheduler` / `after_layer:core|platform` / `after_tick`）；
-4. 在 `PROFILES` 注册（当前是 `{"A1": ..., "A5": ...}`）；
+4. 在 `PROFILES` 注册（当前覆盖 A1–A10）；
 5. 跑单步/事件测试；
 6. 前端不做任何改动。
 
-> `profiles/a2.py`、`targets()`、声明式 DSL 是后续规划，不是当前文件布局。
-> 如果某个攻击没有显式阶段事件，先用现有事件/时间兜底；不要为了 trace 去改攻击逻辑。
+> `profiles/a2.py`、`targets()`、声明式 DSL 仍是后续规划，不是当前文件布局。
+> 如果某个攻击没有显式阶段事件，优先补只读事件投影；不要为了 trace 去改攻击逻辑。
 
 ## 6. 默认 profile 与“无攻击”
 

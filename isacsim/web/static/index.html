@@ -26,7 +26,6 @@
     <button id="btnPause">暂停</button>
     <button id="btnResume">继续</button>
     <button id="btnStop" class="danger">停止</button>
-    <button id="btnReset">复位</button>
     <a class="trace-link" href="/trace" title="打开运行追踪页">运行追踪</a>
     <label class="speedbox">时长
       <input id="durationInput" type="number" min="5" max="600" value="60" style="width:64px"/> s
@@ -177,8 +176,15 @@
     </div>
 
     <div class="tab-pane" id="tab-runs">
-      <button id="btnRefreshRuns" class="ghostbtn">刷新</button>
+      <div class="runtools">
+        <div id="storageBar" class="storagebar muted small">读取占用…</div>
+        <div class="runactions">
+          <button id="btnRefreshRuns" class="ghostbtn">刷新</button>
+          <button id="btnCleanup" class="danger">清理历史数据…</button>
+        </div>
+      </div>
       <ul id="runList" class="runs"></ul>
+      <p class="muted small">清理只影响 out/ 下的运行目录；日志、截图、导出目录不在范围内。</p>
     </div>
   </aside>
 </main>
@@ -187,6 +193,82 @@
   <span id="hwInfo">读取硬件信息…</span>
   <span id="connInfo" class="muted">未连接</span>
 </footer>
+
+<div class="modal-backdrop" id="cleanupModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cleanupTitle">
+    <header class="modal-head">
+      <div>
+        <h2 id="cleanupTitle">清理历史模拟数据</h2>
+        <p class="muted small" id="cleanupRoot"></p>
+      </div>
+      <button id="cleanupClose" class="modal-x" aria-label="关闭">×</button>
+    </header>
+
+    <div class="modal-body">
+      <div class="storage-cards" id="storageCards"></div>
+
+      <section class="policy">
+        <h3>清理范围</h3>
+        <label class="checkline">
+          <input type="checkbox" id="scopeWeb" checked/>
+          <span>控制台会话 <span class="muted" id="scopeWebInfo"></span></span>
+        </label>
+        <label class="checkline">
+          <input type="checkbox" id="scopeBatch"/>
+          <span>数据集 / 实验目录 <span class="muted" id="scopeBatchInfo"></span></span>
+        </label>
+        <p class="muted small">数据集按整目录删除，其中的 report/eval 会一并移除。</p>
+
+        <h3>保留策略</h3>
+        <div class="presets">
+          <button type="button" class="ghostbtn" data-preset="latest">保留最近 3 次</button>
+          <button type="button" class="ghostbtn" data-preset="days">保留近 7 天</button>
+          <button type="button" class="ghostbtn" data-preset="all">全部清空</button>
+        </div>
+        <div class="policyrow">
+          <label>每类保留最近 <input id="keepInput" type="number" min="0" max="999" value="3"/> 项</label>
+          <label>只清理早于 <input id="ageInput" type="number" min="1" placeholder="不限"/> 天</label>
+        </div>
+        <p class="muted small" id="policyHint"></p>
+        <label class="checkline dangerline">
+          <input type="checkbox" id="allInput"/>
+          <span>清空所选范围（受保护项除外，不可恢复）</span>
+        </label>
+      </section>
+
+      <section>
+        <div class="planhead">
+          <h3>清理预览</h3>
+          <span id="planBadge" class="badge">计算中…</span>
+        </div>
+        <div class="plansummary" id="planSummary"></div>
+        <div class="table-wrap short planwrap">
+          <table class="grid" id="planTable">
+            <thead><tr><th>名称</th><th>类别</th><th>大小</th><th>修改时间</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="muted small" id="planMore"></p>
+      </section>
+
+      <div class="progress" id="cleanupProgress" hidden>
+        <div class="bar"><i id="cleanupBar"></i></div>
+        <p id="cleanupProgressText"></p>
+      </div>
+    </div>
+
+    <footer class="modal-foot">
+      <label class="checkline">
+        <input type="checkbox" id="cleanupConfirm"/>
+        <span>我已知晓：删除后不可恢复</span>
+      </label>
+      <div class="footactions">
+        <button id="cleanupCancel">取消</button>
+        <button id="cleanupApply" class="danger" disabled>删除并释放空间</button>
+      </div>
+    </footer>
+  </div>
+</div>
 
 <script src="/static/app.js"></script>
 </body>

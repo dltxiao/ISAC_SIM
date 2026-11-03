@@ -15,7 +15,7 @@
 ## 2 页面结构
 
 ```
-┌ 顶栏：运行状态 / 仿真时间 / 倍速 / 在线车辆 / 开始 暂停 继续 停止 复位 ├
+┌ 顶栏：运行状态 / 仿真时间 / 倍速 / 在线车辆 / 开始 暂停 继续 停止 ├
 ├──────────────────────────────┬──────────────────────────────────────────┤
 │ 地图画布                      │ 参与实体 │ 统计 │ 网络/平台 │ 攻击编排 │ 事件日志 │ 运行产物 │
 │  · 车道、路口、信号灯          │                                          │
@@ -76,10 +76,21 @@
 | 暂停 | 仿真线程停在当前步，SUMO 保活 | 仅 running 可用 |
 | 继续 | 从暂停点继续 | 仅 paused 可用 |
 | 停止 | 关闭 TraCI、结束 SUMO、刷盘、归档 | 幂等 |
-| 复位 | 停止后按原配置/原种子重启 | running/paused/stopped 可用 |
 | 时长 | 场景仿真时长（5–600 s） | 开始前设置 |
 | 倍速 | 0.5×–8×，实时节拍 | 高倍速下仍按步发射，不会丢记录 |
 | 注入攻击 | 类型/数量/强度/时长/延迟 | 仿真未运行返回 409 |
+
+### 3.4 运行追踪页
+
+`/trace` 顶栏可直接 **开始 / 冻结 / 继续 / 停止**，不需要先回主控制台。开始使用默认 seed 11、1× 和当前会话时长。
+
+追踪页的“攻击注入”条提供 A1–A10 下拉选择、强度滑杆和时长，点“注入”即可：
+
+- 若仿真正在运行，注入前会自动冻结，保证能停在 S0；
+- 注入后点“下一步”从 S0 开始按 profile 单步；
+- 冻结/继续/停止与主控制台共享同一会话，两个页面状态一致。
+
+主控制台不再提供“复位”按钮；需要重新运行时，依次点“停止 → 开始”即可。
 
 ## 4 攻击编排
 
@@ -88,7 +99,41 @@
 - 数量 1–20，多实例按 2 s 间隔错峰启动；同一运行可多次注入。
 - 强度影响幅度（幽灵数量/附加负载/偏置/伪造速率/干扰强度），包络判定写入真值。
 
-## 5 API
+## 5 运行产物与空间清理
+
+入口：「运行产物」标签页 → 右上角 **清理历史数据…**。
+
+弹窗里先看四项占用（`out/` 总量、磁盘可用、控制台会话、数据集），再定策略：
+
+| 决策 | 含义 |
+|---|---|
+| 清理范围 | 「控制台会话」= `out/web/<run>`；「数据集/实验」= `out/` 下含运行子目录的实验根（整目录删除） |
+| 每类保留最近 N 项 | 按修改时间排序，两个范围各自保留 N 项；默认 3 |
+| 只清理早于 N 天 | 可选；与"保留 N 项"是**同时满足**才删除，偏保守 |
+| 清空所选范围 | 跳过前两条，删除该范围全部条目（受保护项除外） |
+
+弹窗顶部还有三个快捷预设：**保留最近 3 次**、**保留近 7 天**、**全部清空**，点选后仍会先出预览。
+
+预览会列出将删除的条目、大小、修改时间，并显示合计可释放空间。确认框勾选后才会启用
+「删除并释放空间」；删除在后台线程执行，弹窗显示进度，完成后自动刷新列表与占用。
+
+保护规则：
+
+- 正在运行/暂停的 Web 会话目录始终跳过；
+- `out/web.pid` 指向的存活服务，其最新会话会被保护（CLI 与 Web 共用）；
+- Web 会话的下载缓存 `<run>.zip` 与目录一并统计、一并删除；
+- 只动 `out/` 下识别出的运行目录；日志、截图、`nidd_*` 导出目录不在范围内；
+- 删除不可恢复，确认框是唯一的"撤销点"。
+
+等价 CLI（默认只预览）：
+
+```bash
+.venv/bin/python -m isacsim clean --keep 3                 # 预览
+.venv/bin/python -m isacsim clean --keep 3 --yes           # 执行
+.venv/bin/python -m isacsim clean --keep 0 --include-batches --yes
+```
+
+## 6 API
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -96,7 +141,7 @@
 | GET | `/api/state` | 当前快照（实体/统计/攻击/告警） |
 | GET | `/api/stream` | SSE，约 6.7 Hz 推送快照 |
 | POST | `/api/session/start` | `{seed,duration,speed,scene}` |
-| POST | `/api/session/pause|resume|stop|reset` | 生命周期 |
+| POST | `/api/session/pause|resume|stop` | 生命周期 |
 | POST | `/api/session/speed` | `{speed}` |
 | POST | `/api/attacks` | `{type,count,amplitude,duration,start}` |
 | DELETE | `/api/attacks/{id}` | 中止 |
@@ -107,8 +152,13 @@
 | GET | `/api/defense` | 最近防御动作 |
 | GET | `/api/runs` | 历史运行与大小 |
 | GET | `/api/runs/{id}/download` | 下载 zip |
+| GET | `/api/storage` | `out/` 占用、磁盘余量、会话/数据集数量 |
+| POST | `/api/storage/plan` | 按策略预览：`{scope,keep,older_than_days,all}` |
+| POST | `/api/storage/cleanup` | 执行清理（需 `confirm:true`），后台任务 |
+| GET | `/api/storage/cleanup` | 清理进度：`state/total/done/removed/freed_bytes/errors` |
 
-> 历史 Web 会话写入 `out/web/`，不会自动轮转；开发期清理见 [环境与依赖 §4.1](00-环境与依赖.md#41-清理开发产物)。
+> 历史 Web 会话写入 `out/web/`，不会自动轮转；页面内清理见 §5，CLI 口径见
+> [环境与依赖 §4.1](00-环境与依赖.md#41-清理开发产物)。
 
 示例：
 
@@ -118,9 +168,15 @@ curl -X POST localhost:8080/api/session/start -H 'Content-Type: application/json
 curl -X POST localhost:8080/api/attacks -H 'Content-Type: application/json' \
      -d '{"type":"A3","count":2,"amplitude":0.7,"duration":10}'
 curl localhost:8080/api/state | jq '.attacks, .alert_total, .latency_ms'
+# 清理：先预览，再确认执行
+curl -X POST localhost:8080/api/storage/plan -H 'Content-Type: application/json' \
+     -d '{"scope":["web"],"keep":3}'
+curl -X POST localhost:8080/api/storage/cleanup -H 'Content-Type: application/json' \
+     -d '{"scope":["web"],"keep":3,"confirm":true}'
+curl localhost:8080/api/storage/cleanup | jq '{state,done,total,freed_bytes}'
 ```
 
-## 6 故障处理
+## 7 故障处理
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
@@ -130,16 +186,19 @@ curl localhost:8080/api/state | jq '.attacks, .alert_total, .latency_ms'
 | 停止后仍有 SUMO | 进程异常退出路径 | `pkill -f "sumo/bin/sum[o]"` |
 | 车辆数为 0 | 运行前 1 s 内车辆尚未发车 | 等待 1–2 s |
 
-## 7 自动化检查
+## 8 自动化检查
 
 ```bash
 # 需先启动控制台
 .venv/bin/python scripts/ui_smoke.py
+.venv/bin/python scripts/ui_cleanup_smoke.py     # 清理弹窗：预览/交互，不删除
 ```
 
 无头浏览器会依次验证：页面加载、开始、画布出现车辆、注入攻击后计数上升、网络/平台视图出现、暂停、停止，并在 `out/ui_smoke.png` 留下截图；任何前端 console 错误都会使其失败。
 
-## 8 设计边界
+`ui_cleanup_smoke.py` 只打开清理弹窗、检查预览与禁用逻辑，然后按 Esc 关闭，不执行删除。
+
+## 9 设计边界
 
 - Web 显示的是**运维视图**，包含真值计数；检测器只读观测流，不读真值。
 - 单会话单用户；多浏览器共享同一状态。

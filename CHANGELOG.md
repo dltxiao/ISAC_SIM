@@ -23,6 +23,7 @@
 - **v0.3.0 验收**（M6）：500 攻击 + 500 正常（A1–A10 各 50，15 s，18 进程）识别率 **100%**、误检率 **0.20%**、P99 **0.214 ms**、链级节点召回 **55.28%**；批量 **198.4 s**；60 s 场景 **16.8 s**；报告见 [docs/11](docs/11-v0.3.0验收报告.md)。
 - **核心网状态可视化**：左侧 Canvas `路网/叠加/核心网` 切换，节点按 green/orange/red 着色；`layers/health.py` 统一阈值；A5/A6/A7/A8/A9/A10 状态已实测。
 - **开发产物清理**：`isacsim clean` 默认预览、只清 Web 会话并保留最近 N 个；`--include-batches` 显式清理批量/实验目录；自动保护正在写入的会话与 `--protect` 路径。
+- **页面内空间清理**：运行产物页「清理历史数据…」弹窗，按范围（会话/数据集）、保留最近 N 项、早于 N 天、清空四项决策实时预览；后台删除 + 进度条，完成后刷新占用；受保护会话不可删；`/api/storage`、`/api/storage/plan`、`/api/storage/cleanup` 三个接口。
 - **运行追踪 v1**：独立 `/trace` 页面、watch/trace 数据层、A1 S1–S5 检查点单步、SSE；见 [docs/trace/10](docs/trace/10-v1实现说明.md)。
 - **运行追踪 v2 规划**：`TraceProfile`/`WatchProvider`、S0、增量 SSE、trace.jsonl/回放、origin 与 5G 核心网融合（W7）；见 [docs/trace/11](docs/trace/11-v2完善规划.md)。
 - **`/trace` 核心网/平台 provider**：无攻击时也显示 `core:summary`、8 个核心网节点、`core:ues`、`platform:summary`；节点 health 直接进入 watch 卡片。
@@ -30,13 +31,21 @@
 - **A5 单步追踪**：`TraceProfile`（A1/A5）+ S0–S5 检查点；S0 在 scheduler 后、S1/S2 在 core 后、S3 在 platform 后真正暂停；同一层边界可连续展示多个阶段。
 - **`/trace` 核心网会话/流表**：`core:sessions`（SMF `session_list`）与 `core:flows`（UPF `flow_list`）有界表格，显示 UE、DNN、5QI、TEID、路由与状态。
 - **`/trace` 平台 token/订阅表**：`platform:tokens`（IAM `token_list`）与 `platform:subscriptions`（`subscription_list`）有界表格，显示 token、租户、scopes、订阅事件与状态。
+- **A1–A10 追踪 profile**：新增 A2/A3/A4/A6/A7/A8/A9/A10 的 `TraceProfile`；A2–A10 从 S0 开始，A1 保持 S1–S5；`/api/trace/capabilities.profiles` 返回全部 profile。
+- **跨层事件桥**：A3/A10 的 `radar.echo/track`（按 tick 采样）、A4 的 `v2x.cam.clone`、A6/A7 的 `v2x.cpm.forged` 投影为 TraceEvent；`core.*`/`app.*` 事件保留 `provenance/vehicle_ids/5qi/route/actor/bot` 等 profile 判定字段。
+- **profile 顺序约束修正**：`wait_for` 的参考阶段尚未出现时不再绕过顺序；A2 的链路干扰不会抢在注入制动之前暂停。
+- **`/trace` 会话与注入**：追踪页顶栏增加开始/停止；A1–A10 注入改为“类型下拉 + 强度 + 时长 + 注入”条；运行中注入自动冻结，保证 S0 可单步。
+- **`/trace` 中栏分组与合并卡**：中栏改为“总览/感知/车辆/核心网/平台/攻击”标签；4 个传感器合并为标签卡；核心网合并为“节点健康矩阵 + UE/会话/流表”；平台合并为“概览/Token/订阅”；左栏点击自动切组定位。
+- **移除复位**：主控制台取消复位按钮、`/api/session/reset` 与 `SessionManager.reset`；复位原本等价于停止后按原参数开始，重跑改为“停止 → 开始”。
+- **测试**：新增 A1–A10 profile、事件桥、capabilities 与“无攻击不产生雷达事件”测试；全量 **89 项 pytest 通过**。
 
 ### 文档
 
 - [`docs/01-系统架构与数据流.md`](docs/01-系统架构与数据流.md) 扩充为字段级数据字典：
   时间/坐标基准、统一信封、实体×产出总览、逐流字段说明（含单位、生成方式、用途）、
   攻击改写对照、真值/告警/附属文件、消费者矩阵、数据模型已知边界。
-- trace 设计文档同步到 v1.2：新增 [12 当前实现状态](docs/trace/12-当前实现状态.md)，更新 01–11 的已实现/未实现边界（A1/A5、Core/Platform provider、事件聚合、会话/流表、平台表；增量 SSE/回放/origin/focus 仍未实现）。
+- trace 设计文档同步到 v1.3：更新 [12 当前实现状态](docs/trace/12-当前实现状态.md)、A1–A10 profile/事件桥与 01–11 的已实现/未实现边界；增量 SSE/回放/origin/focus 仍未实现。
+- 新增 [攻击实现解析（A1–A10）](docs/attacks/README.md)：A1 文档移入 `docs/attacks/`，补齐 A2–A10 的代码走读、注入点、下游消费、真值、检测、时序与边界。
 
 ### 修复
 
@@ -47,10 +56,12 @@
 - 基站传感器产生的记录实体前缀由 `rsu:` 改为 `gnb:`（`sensing.objects`/`sensing.frame`/`ghost_object` 告警）。
 - 回波 `snr_db` 与检测概率口径统一：卡车增加 3 dB 处理增益（此前判决用了、记录没用）。
 - **命名解耦**：分布式 `Trace` 类型改为 `SpanContext`，`ctx.trace` 改为 `ctx.span`；`record.trace_id/span_id` 字段保持不变，为 `/trace` 观测追踪预留命名边界。
+- 批量/实验目录识别兼容没有 `meta.json` 的单次运行（按 `truth/events.jsonl` 判定），`out/data_doc` 一类目录不再漏扫。
+- Web 会话的 `<run>.zip` 下载缓存随运行目录一并统计与删除，不再留下孤儿文件。
 
 ### 测试
 
-- 77 项测试通过（合并后：核心网/平台/链/追踪/Provider/事件聚合/A5 单步等）。
+- 82 项测试通过（新增清理策略、保护规则、zip 统计与 API 流程）。
 
 ---
 

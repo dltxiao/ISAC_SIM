@@ -54,6 +54,14 @@
   // ---------------------------------------------------------------- utils
   const fmtInt = (n) => (n || 0).toLocaleString("zh-CN");
   const fmtMB = (b) => `${((b || 0) / 1048576).toFixed(2)} MB`;
+  const fmtBytes = (b) => {
+    let v = Number(b) || 0;
+    const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+    return i === 0 ? `${Math.round(v)} B` : `${v.toFixed(1)} ${units[i]}`;
+  };
+  const fmtClock = (sec) => (sec ? new Date(sec * 1000).toLocaleString("zh-CN", { hour12: false }) : "—");
   const fmtTime = (t) => `${(t || 0).toFixed(1)} s`;
 
   async function api(path, method = "GET", body = null) {
@@ -448,7 +456,6 @@
     $("btnPause").disabled = !running;
     $("btnResume").disabled = !paused;
     $("btnStop").disabled = !(running || paused);
-    $("btnReset").disabled = !(running || paused || s.state === "stopped");
     $("btnInject").disabled = !(running || paused);
     $("mapHint").style.display = (s.state === "running" || s.state === "paused") ? "none" : "block";
   }
@@ -672,7 +679,6 @@
   $("btnPause").onclick = () => post("/api/session/pause");
   $("btnResume").onclick = () => post("/api/session/resume");
   $("btnStop").onclick = () => post("/api/session/stop");
-  $("btnReset").onclick = () => post("/api/session/reset");
   $("speedSelect").onchange = (e) => post("/api/session/speed", { speed: Number(e.target.value) });
 
   $("attackAmplitude").oninput = (e) => {
@@ -716,9 +722,20 @@
       document.querySelectorAll(".tab-pane").forEach((p) => p.classList.remove("active"));
       btn.classList.add("active");
       $(`tab-${btn.dataset.tab}`).classList.add("active");
-      if (btn.dataset.tab === "runs") loadRuns();
+      if (btn.dataset.tab === "runs") { loadRuns(); loadStorage(); }
     };
   });
+
+  async function loadStorage() {
+    const bar = $("storageBar");
+    try {
+      const s = await api("/api/storage");
+      bar.textContent = `out 占用 ${s.out_human}（会话 ${s.web.count} · 数据集 ${s.batch.count}）`
+        + ` · 磁盘可用 ${fmtBytes(s.disk.free_bytes)}`;
+    } catch (err) {
+      bar.textContent = "占用信息不可用";
+    }
+  }
 
   async function loadRuns() {
     try {
@@ -735,6 +752,225 @@
     } catch (err) { /* ignore */ }
   }
   $("btnRefreshRuns").onclick = loadRuns;
+
+  // ------------------------------------------------------------- cleanup
+  const escapeHtml = (v) => String(v).replace(/[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const cleanup = { plan: null, timer: null, poll: null, busy: false, seq: 0, polling: false };
+
+  function cleanupPolicy() {
+    const scope = [];
+    if ($("scopeWeb").checked) scope.push("web");
+    if ($("scopeBatch").checked) scope.push("batch");
+    const age = $("ageInput").value.trim();
+    return {
+      scope,
+      keep: Math.max(0, Math.min(999, Number($("keepInput").value || 0))),
+      older_than_days: age ? Number(age) : null,
+      all: $("allInput").checked,
+    };
+  }
+
+  function cleanupSyncControls() {
+    const all = $("allInput").checked;
+    $("keepInput").disabled = all || cleanup.busy;
+    $("ageInput").disabled = all || cleanup.busy;
+    $("policyHint").textContent = all
+      ? "将删除所选范围内的全部条目；正在运行的会话始终保留。"
+      : "同时满足“超出最近 N 项”和“早于 N 天”（填写时）才会删除，两个条件都满足才动手。";
+    updateApply();
+  }
+
+  function updateApply() {
+    const can = !cleanup.busy && cleanup.plan && cleanup.plan.delete_count > 0
+      && $("cleanupConfirm").checked;
+    const btn = $("cleanupApply");
+    btn.disabled = !can;
+    btn.textContent = cleanup.busy ? "正在删除…" : "删除并释放空间";
+  }
+
+  function renderStorage(s) {
+    if (!s) return;
+    $("storageCards").innerHTML = `
+      <div class="scard"><span>历史数据</span><b>${s.out_human}</b><small>${escapeHtml(s.root)}</small></div>
+      <div class="scard"><span>磁盘可用</span><b>${fmtBytes(s.disk.free_bytes)}</b><small>共 ${fmtBytes(s.disk.total_bytes)}</small></div>
+      <div class="scard"><span>控制台会话</span><b>${s.web.count} 项</b><small>${s.web.human}</small></div>
+      <div class="scard"><span>数据集/实验</span><b>${s.batch.count} 项</b><small>${s.batch.human}</small></div>`;
+    $("scopeWebInfo").textContent = `（${s.web.count} 项 · ${s.web.human}）`;
+    $("scopeBatchInfo").textContent = `（${s.batch.count} 项 · ${s.batch.human}）`;
+    $("cleanupRoot").textContent = `${s.root} · 最近写入 ${fmtClock(s.newest_mtime)}`;
+  }
+
+  function renderPlan(p) {
+    cleanup.plan = p;
+    renderStorage(p.summary);
+    const badge = $("planBadge");
+    badge.textContent = p.delete_count
+      ? `将删除 ${p.delete_count} 项 · 释放 ${p.delete_human}`
+      : "没有符合条件的条目";
+    badge.className = `badge ${p.delete_count ? "error" : ""}`;
+    const bits = [`保留 ${p.keep_count} 项`];
+    if (p.protected_count) bits[0] += `（含受保护 ${p.protected_count} 项）`;
+    if (p.policy.all) bits.push("清空模式");
+    else if (p.policy.older_than_days) bits.push(`仅早于 ${p.policy.older_than_days} 天`);
+    $("planSummary").textContent = bits.join(" · ");
+
+    const tbody = $("planTable").querySelector("tbody");
+    tbody.innerHTML = "";
+    for (const it of p.items.slice(0, 80)) {
+      const tr = document.createElement("tr");
+      const kind = it.kind === "web" ? "控制台" : "数据集";
+      tr.innerHTML = `<td title="${escapeHtml(it.path)}">${escapeHtml(it.name)}</td>
+        <td>${kind}${it.runs > 1 ? ` · ${it.runs} 次` : ""}</td>
+        <td class="num">${it.size_human}</td>
+        <td>${fmtClock(it.mtime)}</td>`;
+      tbody.appendChild(tr);
+    }
+    $("planTable").parentElement.style.display = p.delete_count ? "" : "none";
+    $("planMore").textContent = p.items.length > 80
+      ? `另有 ${p.items.length - 80} 项未列出，仍会按策略删除。`
+      : "";
+    updateApply();
+  }
+
+  async function refreshPlan() {
+    if (cleanup.busy) return;
+    const policy = cleanupPolicy();
+    if (!policy.scope.length) {
+      cleanup.seq += 1;
+      cleanup.plan = null;
+      $("planBadge").textContent = "请选择清理范围";
+      $("planBadge").className = "badge";
+      $("planSummary").textContent = "";
+      $("planMore").textContent = "";
+      $("planTable").parentElement.style.display = "none";
+      updateApply();
+      return;
+    }
+    $("planBadge").textContent = "计算中…";
+    $("planBadge").className = "badge";
+    const seq = ++cleanup.seq;
+    try {
+      const p = await api("/api/storage/plan", "POST", policy);
+      if (seq !== cleanup.seq) return;
+      renderPlan(p);
+    } catch (err) {
+      if (seq !== cleanup.seq) return;
+      cleanup.plan = null;
+      $("planBadge").textContent = "预览失败";
+      $("planSummary").textContent = err.message;
+      $("planMore").textContent = "";
+      updateApply();
+    }
+  }
+
+  function schedulePlan() {
+    cleanupSyncControls();
+    clearTimeout(cleanup.timer);
+    cleanup.timer = setTimeout(refreshPlan, 300);
+  }
+
+  async function openCleanup() {
+    $("cleanupModal").hidden = false;
+    $("cleanupConfirm").checked = false;
+    $("cleanupProgress").hidden = true;
+    $("cleanupBar").style.width = "0%";
+    $("allInput").checked = false;
+    cleanup.busy = false;
+    cleanupSyncControls();
+    await refreshPlan();
+    $("cleanupClose").focus();
+  }
+
+  function closeCleanup() {
+    if (cleanup.busy) return;
+    clearTimeout(cleanup.timer);
+    $("cleanupModal").hidden = true;
+  }
+
+  function setBusyUI(busy) {
+    cleanup.busy = busy;
+    for (const id of ["scopeWeb", "scopeBatch", "keepInput", "ageInput",
+                      "allInput", "cleanupConfirm", "cleanupCancel", "cleanupClose"]) {
+      $(id).disabled = busy;
+    }
+    document.querySelectorAll("[data-preset]").forEach((b) => { b.disabled = busy; });
+    updateApply();
+  }
+
+  async function pollCleanup() {
+    if (cleanup.polling) return;
+    cleanup.polling = true;
+    try {
+      const st = await api("/api/storage/cleanup");
+      const pct = st.total ? Math.round((st.done / st.total) * 100) : 0;
+      $("cleanupBar").style.width = `${pct}%`;
+      if (st.state === "done") {
+        $("cleanupProgressText").textContent =
+          `完成：删除 ${st.removed}/${st.total} 项，释放 ${st.freed_human}`
+          + (st.errors.length ? `；${st.errors.length} 个错误：${st.errors[0]}` : "");
+        if (cleanup.poll) { clearInterval(cleanup.poll); cleanup.poll = null; }
+        setBusyUI(false);
+        cleanup.plan = null;
+        $("cleanupConfirm").checked = false;
+        updateApply();
+        loadRuns();
+        loadStorage();
+        await refreshPlan();
+      } else {
+        $("cleanupProgressText").textContent =
+          `正在删除 ${st.done}/${st.total} 项，已释放 ${st.freed_human}…`;
+      }
+    } catch (err) {
+      $("cleanupProgressText").textContent = `读取进度失败：${err.message}`;
+    } finally {
+      cleanup.polling = false;
+    }
+  }
+
+  async function applyCleanup() {
+    if (!cleanup.plan || !cleanup.plan.delete_count) return;
+    setBusyUI(true);
+    $("cleanupProgress").hidden = false;
+    $("cleanupBar").style.width = "0%";
+    $("cleanupProgressText").textContent = "正在启动清理任务…";
+    try {
+      await api("/api/storage/cleanup", "POST", { ...cleanupPolicy(), confirm: true });
+      if (cleanup.poll) clearInterval(cleanup.poll);
+      cleanup.poll = setInterval(pollCleanup, 400);
+      await pollCleanup();
+    } catch (err) {
+      setBusyUI(false);
+      $("cleanupProgressText").textContent = `无法启动清理：${err.message}`;
+    }
+  }
+
+  $("btnCleanup").onclick = openCleanup;
+  $("cleanupClose").onclick = closeCleanup;
+  $("cleanupCancel").onclick = closeCleanup;
+  $("cleanupApply").onclick = applyCleanup;
+  $("cleanupConfirm").onchange = updateApply;
+  document.querySelectorAll("[data-preset]").forEach((btn) => {
+    btn.onclick = () => {
+      const preset = btn.dataset.preset;
+      $("allInput").checked = preset === "all";
+      $("keepInput").value = preset === "days" ? 0 : 3;
+      $("ageInput").value = preset === "days" ? 7 : "";
+      schedulePlan();
+    };
+  });
+  for (const id of ["scopeWeb", "scopeBatch", "keepInput", "ageInput", "allInput"]) {
+    const el = $(id);
+    el.addEventListener("change", schedulePlan);
+    if (el.type === "number") el.addEventListener("input", schedulePlan);
+  }
+  $("cleanupModal").addEventListener("click", (ev) => {
+    if (ev.target === $("cleanupModal")) closeCleanup();
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && !$("cleanupModal").hidden) closeCleanup();
+  });
+
   $("btnClearLog").onclick = () => { $("logList").innerHTML = ""; logKeys = new Set(); };
 
   // ------------------------------------------------------------ pointer

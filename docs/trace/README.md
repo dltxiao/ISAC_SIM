@@ -1,7 +1,7 @@
 # 运行追踪与单步调试（Trace / Watch）设计
 
-> 状态：**v1.2 可运行原型**（`feature/trace-watch` @ `ca641b7`，77 项 pytest 通过）。
-> 已实现 A1/A5 检查点、core/platform provider 与事件、会话/流表、平台 token/订阅表；**未实现**增量 SSE、回放/导出、origin、focus、单控制者、A2–A4/A6–A10 profile。
+> 状态：**v1.3 可运行原型**（`feature/trace-watch`，全量 pytest 通过）。
+> 已实现 A1–A10 检查点、core/platform provider 与事件、会话/流表、平台 token/订阅表；**未实现**增量 SSE、回放/导出、origin、focus、单控制者。
 > 完整差异与已知限制见 [12 当前实现状态](12-当前实现状态.md)；代码基线为 `master`（含通信层扩展与 SpanContext 命名）。
 > 目标读者：仿真后端、Web 前端、攻击剧本作者、演示/验收人员。
 
@@ -46,7 +46,7 @@
 │                     TraceService                                     │
 │    ├─ 全局 target：scene/sensor/fleet/pc5/detector/defense           │
 │    ├─ WatchProvider：CoreProvider / PlatformProvider                 │
-│    ├─ TraceProfile：A1（S1–S5）/ A5（S0–S5）                          │
+│    ├─ TraceProfile：A1（S1–S5）/ A2–A10（S0–S5/S4）                  │
 │    ├─ TraceStore：frames / events / steps / cursor                   │
 │    └─ StepController：pause_at（Condition）/ StepFrame                │
 └──────────────────────────────┼───────────────────────────────────────┘
@@ -70,7 +70,7 @@
 | ADR-07 | 实时只能“冻结/前进”，回退用回放 | 仿真不能倒带；回放从 JSONL + `graph.snapshot` 重建 |
 | ADR-08 | 真值单独命名空间，默认折叠 | 检测器不读真值；演示页也不能让观众误以为检测用了真值 |
 
-> 当前落地：ADR-01/02/03/04 已实现；ADR-05 的 `after_scheduler`/`after_layer`/`after_tick` 已实现；ADR-06 已用于 A1/A5，A2–A10 未接入；ADR-07/08 未实现。
+> 当前落地：ADR-01/02/03/04 已实现；ADR-05 的 `after_scheduler`/`after_layer`/`after_tick` 已实现；ADR-06 已用于 A1–A10；ADR-07/08 未实现。
 
 ## 5. 文档索引
 
@@ -95,8 +95,10 @@
 
 - 一个独立的 `/trace` 页面；
 - watch/trace 数据层与 StepFrame；
-- A1 的 S1–S5 与 A5 的 S0–S5；
+- A1 的 S1–S5 与 A2–A10 的 S0–S5/S4；
 - 无攻击时的传感器/车队/PC5/检测器，以及 5G 核心网/平台节点、UE、会话、流表、token、订阅；
+- 追踪页内开始/停止、A1–A10 注入条（运行中注入自动冻结）；
+- 中栏按“总览/感知/车辆/核心网/平台/攻击”标签切换；传感器、核心网节点/表、平台表合并为标签卡；
 - 实时、暂停、tick/checkpoint 单步。
 
 ### 6.2 规划中
@@ -104,7 +106,7 @@
 - 增量 SSE、回放/导出；
 - HookBus/emit origin；
 - focus 与单控制者；
-- A2–A4、A6–A10 的 profile；
+- 多攻击并存时每个攻击独立 profile；
 - truth 演示命名空间。
 
 ### 6.3 不做
@@ -119,17 +121,17 @@
 
 ## 7. 成功标准（摘要）
 
-1. **能讲清 A1/A5**：A1 S1–S5、A5 S0–S5，2 分钟内讲完；每步能看到“谁改了谁、谁消费了它、产生了什么后果”。（已实现）
+1. **能讲清 A1–A10**：A1 S1–S5、A2–A10 S0–S5/S4，2 分钟内讲完；每步能看到“谁改了谁、谁消费了它、产生了什么后果”。（已实现）
 2. **无攻击也有用**：展示传感器/车辆/PC5，以及核心网/平台节点、UE、会话、流表、token、订阅。（已实现）
-3. **加攻击不改前端**：A1/A5 已通过 `profiles.py` 接入；A2–A10 尚未接入。（部分实现）
-4. **单步可控**：检查点在安全边界暂停；暂停后状态不变。（A1/A5 已实现）
-5. **低开销**：60 s 场景 trace 开销目标 <5% 墙钟时间；当前 77 项测试通过，尚未做正式 60 s 开销基准。（待验证）
+3. **加攻击不改前端**：A1–A10 已通过 `profiles.py` 接入。（已实现）
+4. **单步可控**：检查点在安全边界暂停；暂停后状态不变。（A1–A10 已实现）
+5. **低开销**：60 s 场景 trace 开销目标 <5% 墙钟时间；当前全量 pytest 通过，尚未做正式 60 s 开销基准。（待验证）
 6. **可复现**：同 seed 同参数，单步与连续运行的观测记录/真值一致（排除 `t_wall_ns` 与检测时延）。（部分测试覆盖）
 7. **可复盘**：trace.jsonl、回放、导出。（未实现）
 
 ## 8. 与现有文档的关系
 
-- 攻击实现细节：[A1 攻击实现解析](../09-A1攻击实现解析.md)；
+- 攻击实现细节：[A1–A10 攻击实现解析](../attacks/README.md)；
 - 现有架构与数据流：[01 系统架构与数据流](../01-系统架构与数据流.md)；
 - 攻击剧本目录：[02 跨层攻击剧本目录](../02-跨层攻击剧本目录.md)；
 - Web 控制台：[05 Web 控制台使用说明](../05-Web控制台使用说明.md)。

@@ -37,6 +37,23 @@ def test_trace_page_and_capabilities(client):
     cap = client.get("/api/trace/capabilities").json()
     assert cap["schema"] == "isacsim.trace/1"
     assert "step_checkpoint" in cap["modes"]
+    assert set(cap["profiles"]) == {f"A{i}" for i in range(1, 11)} | {"default"}
+
+
+def test_trace_page_has_lifecycle_and_a1_to_a10_injection(client):
+    html = client.get("/trace").text
+    for element_id in ("btnStart", "btnStop", "btnInject", "attackType", "cardTabs"):
+        assert f'id="{element_id}"' in html
+    for atype in (f"A{i}" for i in range(1, 11)):
+        assert f'value="{atype}"' in html
+    assert "btnInjectA1" not in html
+    assert "btnInjectA5" not in html
+
+
+def test_main_page_has_no_reset_and_reset_api_removed(client):
+    html = client.get("/").text
+    assert 'id="btnReset"' not in html
+    assert client.post("/api/session/reset").status_code == 404
 
 
 def test_trace_state_without_session(client):

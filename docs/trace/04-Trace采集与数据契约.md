@@ -1,6 +1,6 @@
 # 04 Trace 采集与数据契约
 
-> **当前状态（2026-10-30）**：`ctx.emit` 观察、A1/A5 StepFrame、core/app/defense 事件与 100 ms 聚合已实现；Hook before/after、origin、增量游标、trace.jsonl 未实现。
+> **当前状态（2026-11-02）**：`ctx.emit` 观察、A1–A10 StepFrame、雷达/CAM/CPM 事件桥、core/app/defense 事件与 100 ms 聚合已实现；Hook before/after、origin、增量游标、trace.jsonl 未实现。
 > 本文同时保留目标契约与已实现契约；未实现项已明确标注。完整差异见 [12 当前实现状态](12-当前实现状态.md)。
 
 ## 1. 采集点
@@ -22,7 +22,7 @@ Trace 不是“再写一遍仿真”，而是从现有代码的少数稳定接�
 
 | `kind` | 产生者 | 例子 | 是否关键事件 |
 |---|---|---|---|
-| `attack.start` | TraceService | A1/A5 启动 | 是 |
+| `attack.start` | TraceService | A1–A10 启动 | 是 |
 | `attack.end` | TraceService | t1 到达 | 是 |
 | `ghost.added` | TraceService | RSU-01 +3 ghost | 是 |
 | `control.command` | TraceService | TTC 1.481 制动 | 是 |
@@ -33,6 +33,9 @@ Trace 不是“再写一遍仿真”，而是从现有代码的少数稳定接�
 | `app.auth` / `app.ingest` / `app.subscription` / `app.control` / `app.audit` | TraceService | token/订阅/云控 | 是（100 ms 聚合） |
 | `defense.action` | TraceService | AMF 限流、路由回切 | 是 |
 | `record.forged_denm` / `record.clone` | TraceService | A1 DENM、A4 克隆 | 是 |
+| `radar.echo` / `radar.track` | TraceService | A3/A10 受害者车雷达样本 | 是（按 tick 采样） |
+| `v2x.cam.clone` | TraceService | A4 伪标识 CAM | 是 |
+| `v2x.cpm.forged` | TraceService | A6/A7 伪造/降级 CPM | 是 |
 
 **规划中但未实现**：`session.start/end`、`attack.stage`、`hook.before/after/drop`、`watch.delta`、`trace.error`、`truth`。
 当前 StepFrame 的 `reason` 承担 stage 语义，没有独立 `attack.stage` 事件。
@@ -68,9 +71,10 @@ Trace 不是“再写一遍仿真”，而是从现有代码的少数稳定接�
 
 - `seq`：会话内单调递增；事件和帧共用；
 - `tick` / `t`：仿真步号/秒；
-- `attack_id`：当前 core/app 事件通常为空；A1/A5 的攻击生命周期事件有值；
+- `attack_id`：攻击生命周期事件有值；A4 克隆/CAM 通过 victim 归因；core/app 事件部分仍为空；
 - `target_id`：可空；
-- `data`：各 kind 自定义；core/app 事件带 `stream/source/entity/msg_type/result/cause/count`。
+- `data`：各 kind 自定义；core/app 事件带 `stream/source/entity/msg_type/result/cause/count`；
+- `data` 白名单扩展：`provenance/token_id/tenant/vehicle_ids/command/action/subscription_id/event_types/actor/5qi/old_5qi/route/bot/ue_id`，供 profile 判定，均为增量字段。
 
 **当前没有** `run_id`、`schema`、`t_wall_ns`、`namespace`、`refs`、`parent_seq` 字段。规划中的统一信封见 §3.1。
 

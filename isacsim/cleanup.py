@@ -99,7 +99,7 @@ def _has_run_child(path: Path) -> bool:
     except OSError:
         return False
     return any(
-        e.is_dir(follow_symlinks=False) and (Path(e.path) / "meta.json").is_file()
+        e.is_dir(follow_symlinks=False) and _is_run_dir(Path(e.path))
         for e in children
     )
 
@@ -117,7 +117,16 @@ def _web_artifacts(root: Path) -> list[Artifact]:
     with os.scandir(base) as it:
         for entry in it:
             if entry.is_dir(follow_symlinks=False):
-                out.append(_artifact(Path(entry.path), "web"))
+                path = Path(entry.path)
+                art = _artifact(path, "web")
+                # 下载缓存 <run>.zip 与运行目录同生命周期，一并计入/删除
+                zpath = Path(f"{path}.zip")
+                try:
+                    if zpath.is_file() and not zpath.is_symlink():
+                        art = replace(art, size_bytes=art.size_bytes + zpath.stat().st_size)
+                except OSError:
+                    pass
+                out.append(art)
     return out
 
 
@@ -180,6 +189,7 @@ def build_plan(
     *,
     keep: int = 3,
     older_than_days: float | None = None,
+    include_web: bool = True,
     include_batches: bool = False,
     all_: bool = False,
     protect: Iterable[str | Path] = (),
@@ -192,8 +202,10 @@ def build_plan(
         raise ValueError("--keep 不能为负数")
     if older_than_days is not None and older_than_days <= 0:
         raise ValueError("--older-than 必须为正数")
+    if not include_web and not include_batches:
+        raise ValueError("清理范围不能为空")
 
-    artifacts = _web_artifacts(root)
+    artifacts = _web_artifacts(root) if include_web else []
     if include_batches:
         artifacts.extend(_batch_artifacts(root))
 
@@ -245,23 +257,37 @@ def build_plan(
     return CleanupPlan(root=root, candidates=candidates, kept=kept, protected=protected)
 
 
+def remove_artifact(artifact: Artifact, root: Path) -> tuple[bool, str | None]:
+    """删除单个产物；返回 (是否删除, 错误信息)。"""
+    root = Path(root).resolve()
+    allowed_parents = {root, root / "web"}
+    if not _safe_target(artifact.path, root) or artifact.path.parent not in allowed_parents:
+        return False, f"跳过不安全的路径：{artifact.path}"
+    if not artifact.path.is_dir():
+        return False, f"目录已不存在：{artifact.path}"
+    try:
+        shutil.rmtree(artifact.path)
+    except OSError as exc:
+        return False, f"{artifact.path.name}: {exc}"
+    zip_path = Path(f"{artifact.path}.zip")
+    if zip_path.is_file() and not zip_path.is_symlink():
+        try:
+            zip_path.unlink()
+        except OSError:
+            pass
+    return True, None
+
+
 def apply_plan(plan: CleanupPlan) -> CleanupResult:
     """执行计划；只允许删除 out/ 下一层的 Web 会话或实验根目录。"""
     removed = 0
     freed = 0
     errors: list[str] = []
-    allowed_parents = {plan.root, plan.root / "web"}
     for a in plan.candidates:
-        if not _safe_target(a.path, plan.root) or a.path.parent not in allowed_parents:
-            errors.append(f"跳过不安全的路径：{a.path}")
-            continue
-        if not a.path.is_dir():
-            errors.append(f"目录已不存在：{a.path}")
-            continue
-        try:
-            shutil.rmtree(a.path)
-        except OSError as exc:
-            errors.append(f"{a.path.name}: {exc}")
+        ok, err = remove_artifact(a, plan.root)
+        if not ok:
+            if err:
+                errors.append(err)
             continue
         removed += 1
         freed += a.size_bytes
