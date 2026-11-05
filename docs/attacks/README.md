@@ -53,6 +53,7 @@
 | A10 | 雷达弱偏 + 25/s 轻度信令 + `audit_seq` 缺口 + 小制动 | 核心网 AMF；平台概览；右栏 `app.audit`/`control.command` | `sensing.radar.*` / `core.nas` / `app.audit` / `control.command` | §8 |
 
 > 注意：`/trace` 是内存投影（含 `ghost.added`、`vehicle.speed_drop`、`record.clone` 等派生事件），`out/` 是原始记录；两边字段粒度不对等，逐项对照见各篇对应小节。
+> `/trace` 新增 **V2X** 标签，内含 `CPM · broadcast summary` 卡：一行一个 sender（RSU/攻击者）的**最新一条** CPM，显示 `object_count/carried/ghost_in_cpm/truncated/attack/flags/delay_ms`；`objects[]` 只保留前 12 条，逐条报文仍在 `out/v2x.cpm.jsonl`。
 
 ## 共同代码路径
 

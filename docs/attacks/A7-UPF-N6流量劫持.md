@@ -205,12 +205,12 @@ Q4 control.command 的 ttc_s>=10、每 0.5 s 重复。
 | 路由漂移 | **核心网** → `核心网 · Core` 卡 → 子标签「节点」 | UPF 节点指标里 `route=dn:EVIL-01`、红点，悬停 reasons `route override`；DN 节点红点 `route hijack` |
 | 流表 | **核心网** → 子标签「流表」 | 所有 `flow.route=dn:EVIL-01`（恢复后回 `dn:DN-01`）；最多 40 行 |
 | 平台溯源 | 右栏 **TRACE** 的 `app.ingest` 事件 → **DETAIL** | `provenance=dn:EVIL-01`、`source=ATK-A7`、`result=accept` |
-| 伪造 CPM | 右栏 `v2x.cpm.forged` 事件 | `sender=ATK-A7`（事件不含 `objects[]`） |
+| 伪造 CPM | **V2X** → `CPM · broadcast summary` 卡的 `ATK-A7` 行；右栏 `v2x.cpm.forged` 事件 | 卡上 `sender=ATK-A7`、`flags` 列显示 `FORGED`、`attack` 列为 `ATK001`；事件不含 `objects[]` |
 | 制动 | **车辆** → `<victim> · state`；右栏 `control.command`（会有多条） | `decel=4.0`、`ttc=99` |
 | 告警 | **总览** → `Detector · alerts`；**底栏时间轴** | `upf_route_drift`、`ingest_provenance_mismatch`、`brake_without_hazard` |
 | 阶段 | 顶栏 **下一步** 后的检查点横幅 | S1 UPF 路由改向（core 层后）→ S2 伪造 CPM 入平台 → S3 云控 → S4 溯源/制动告警 |
 
-不在 `/trace` 上的：N6 抓包（没有）、CPM 的 `objects[]`、`provenance_bad` 计数、流表历史（只有当前快照）。
+不在 `/trace` 上的：N6 抓包（没有）、CPM 的 `objects[]`（卡片只给条数与标记）、`provenance_bad` 计数、流表历史（只有当前快照）。
 
 ### 8.3 对应后端 `out/` 的位置
 

@@ -35,6 +35,21 @@ FLEET_FIELDS = [
     {"name": "affected", "type": "bool", "role": "flag"},
 ]
 
+# CPM 是 10 Hz 广播，逐条进事件环会挤掉攻击证据；这里按 sender 只保留最新摘要。
+CPM_FIELDS = [
+    {"name": "sender", "type": "string", "role": "identity"},
+    {"name": "object_count", "type": "int"},
+    {"name": "carried", "type": "int"},
+    {"name": "ghost_in_cpm", "type": "int"},
+    {"name": "ghosts_sensor", "type": "int"},
+    {"name": "attack", "type": "string"},
+    {"name": "truncated", "type": "bool", "role": "flag"},
+    {"name": "flags", "type": "string"},
+    {"name": "delay_ms", "type": "float", "unit": "ms", "precision": 2},
+    {"name": "cbr", "type": "float", "precision": 3},
+    {"name": "t", "type": "float", "unit": "s", "precision": 2},
+]
+
 # 核心网/平台事件到 watch target 的默认映射；后续 TraceProfile 可覆盖。
 DOMAIN_EVENT_TARGETS = {
     "core.nas": "core:amf",
@@ -127,6 +142,9 @@ class TraceService:
         self._last_fleet_t = -1.0
         self._last_pc5_t = -1.0
         self._last_scene_t = -1.0
+        self._last_cpm_t = -1.0
+        # CPM 按 sender 只保留最新一条：10 Hz × 3 RSU，逐条进事件环会淹没攻击事件。
+        self._cpm: dict[str, dict[str, Any]] = {}
 
         self._attacks: dict[str, dict[str, Any]] = {}
         # 所有需要单独跟踪 state 的车辆（攻击 victim + 被 ADAS 波及的车辆）。
@@ -196,6 +214,10 @@ class TraceService:
                      fields=FLEET_FIELDS, key_field="id", order=30)
         self._target("net:pc5", "struct", "Network", "PC5 · link metrics",
                      description="信道负载与链路质量", order=40)
+        self._target("v2x:cpm", "table", "V2X", "CPM · broadcast summary",
+                     description="每个 sender 的最近一条 CPM 摘要；objects 最多 12 条，"
+                                 "object_count 是全量条数",
+                     fields=CPM_FIELDS, key_field="sender", order=42)
         self._target("det:alerts", "event", "Detection", "Detector · alerts",
                      description="参考检测器的最近告警", order=50)
         self._target("defense:actions", "event", "Defense", "Defense · actions",
@@ -353,23 +375,26 @@ class TraceService:
                     attack_id=self._attack_for_vehicle(vid),
                     severity="effect", t=t,
                 )
-            elif rec.stream == "v2x.cpm" and (p.get("forged") or p.get("degraded")):
-                sender = p.get("sender") or p.get("sender_pseudo")
-                self._event(
-                    "v2x.cpm.forged",
-                    f"forged/degraded CPM @ {sender or rec.entity}",
-                    data={
-                        "sender": sender,
-                        "forged": bool(p.get("forged")),
-                        "degraded": bool(p.get("degraded")),
-                        "object_count": p.get("object_count"),
-                        "delay_ms": p.get("delay_ms"),
-                        "lost": p.get("lost"),
-                        "qos": p.get("qos"),
-                    },
-                    attack_id=self._attack_for_marker(sender),
-                    severity="effect", t=t,
-                )
+            elif rec.stream == "v2x.cpm":
+                # 只更新“每 sender 最新摘要”（v2x:cpm 表），不逐条入事件环。
+                self._on_cpm(rec)
+                if p.get("forged") or p.get("degraded"):
+                    sender = p.get("sender") or p.get("sender_pseudo")
+                    self._event(
+                        "v2x.cpm.forged",
+                        f"forged/degraded CPM @ {sender or rec.entity}",
+                        data={
+                            "sender": sender,
+                            "forged": bool(p.get("forged")),
+                            "degraded": bool(p.get("degraded")),
+                            "object_count": p.get("object_count"),
+                            "delay_ms": p.get("delay_ms"),
+                            "lost": p.get("lost"),
+                            "qos": p.get("qos"),
+                        },
+                        attack_id=self._attack_for_marker(sender),
+                        severity="effect", t=t,
+                    )
             elif rec.stream == "defense.action" or rec.stream.startswith(DOMAIN_EVENT_STREAMS):
                 self._on_domain_record(rec)
 
@@ -467,6 +492,68 @@ class TraceService:
             attack_id=attack_id, severity="effect", t=self.sim.t,
         )
 
+    # ------------------------------------------------------------------
+    # CPM 摘要（v2x:cpm）
+    def _cpm_ghost_ids(self, sender: str) -> set[int]:
+        """CPM 摘要不含 entity，只能按 object_id 回查传感器目标列表里的幽灵。"""
+        sensor_objects = self.sim.sensing.last_objects.get(sender) or []
+        return {
+            o.get("object_id") for o in sensor_objects
+            if str(o.get("entity", "")).startswith("ghost:")
+        }
+
+    def _cpm_ghost_count(self, sender: str, objects: list) -> int:
+        ghost_ids = self._cpm_ghost_ids(sender)
+        if not ghost_ids:
+            return 0
+        return sum(1 for o in objects if o.get("object_id") in ghost_ids)
+
+    def _attack_for_cpm(self, sender: str, ghost_count: int) -> str | None:
+        """攻击者 CPM 用 ATK-* 标记；RSU 带幽灵时按 rsu_id 反查活动攻击。"""
+        attack_id = self._attack_for_marker(sender)
+        if attack_id is not None or not ghost_count:
+            return attack_id
+        for inst in self.sim.scheduler.instances:
+            if getattr(inst, "finished", False):
+                continue
+            if getattr(inst, "rsu_id", None) == sender:
+                return inst.id
+        return None
+
+    def _on_cpm(self, rec) -> None:
+        """每个 sender 只保留最新一条 CPM 摘要（不逐条进事件环）。"""
+        payload = rec.payload or {}
+        sender = str(payload.get("sender") or payload.get("sender_pseudo")
+                     or rec.source or "unknown")
+        objects = payload.get("objects") or []
+        total = int(payload.get("object_count") or len(objects))
+        carried = len(objects)
+        ghost_ids = self._cpm_ghost_ids(sender)
+        ghosts = sum(1 for o in objects if o.get("object_id") in ghost_ids)
+        forged = bool(payload.get("forged"))
+        degraded = bool(payload.get("degraded"))
+        lost = bool(payload.get("lost"))
+        flags = [name for name, on in (("FORGED", forged), ("DEGRADED", degraded),
+                                       ("LOST", lost)) if on]
+        attack_id = self._attack_for_cpm(sender, ghosts)
+        self._cpm[sender] = {
+            "sender": sender,
+            "object_count": total,
+            "carried": carried,
+            "truncated": total > carried,
+            "ghost_in_cpm": ghosts,
+            "ghosts_sensor": len(ghost_ids),
+            "attack": attack_id.rsplit("-", 1)[-1] if attack_id else "",
+            "flags": ",".join(flags),
+            "forged": forged,
+            "degraded": degraded,
+            "lost": lost,
+            "delay_ms": payload.get("delay_ms"),
+            "cbr": payload.get("cbr"),
+            "t": round(float(self.sim.t), 2),
+            "attack_id": attack_id,
+        }
+
     def _attack_for_marker(self, marker) -> str | None:
         """按 ATK-A6 / attacker:A6 / A6 之类的标记找活动攻击。"""
         text = str(marker or "")
@@ -546,6 +633,7 @@ class TraceService:
             self._update_sensors()
             self._update_vehicles(ctx)
             self._update_pc5(ctx)
+            self._update_v2x()
             self._update_detector()
             self._update_scene()
             self._update_providers(ctx)
@@ -780,6 +868,34 @@ class TraceService:
                             data={"cbr": values["cbr"], "offered": values["offered"],
                                   "extra_load": extra},
                             target_id="net:pc5", severity="effect")
+
+    def _update_v2x(self) -> None:
+        """把每 sender 的最新 CPM 摘要投影成 v2x:cpm 表（10 Hz 节流）。"""
+        if not self._cpm or self._t - self._last_cpm_t < 0.1 - 1e-9:
+            return
+        self._last_cpm_t = self._t
+        rows = [dict(r) for r in sorted(self._cpm.values(),
+                                        key=lambda r: str(r.get("sender")))]
+        prev = self._prev_rows.get("v2x:cpm", [])
+        delta = _diff_rows(prev, rows, "sender")
+        self._prev_rows["v2x:cpm"] = rows
+        ghosts = sum(int(r.get("ghost_in_cpm") or 0) for r in rows)
+        ghosts_sensor = sum(int(r.get("ghosts_sensor") or 0) for r in rows)
+        trunc = sum(1 for r in rows if r.get("truncated"))
+        forged = sum(1 for r in rows if r.get("forged") or r.get("degraded"))
+        summary = f"{len(rows)} senders · {ghosts} ghost in CPM"
+        if ghosts_sensor > ghosts:
+            summary += f"（传感器侧 {ghosts_sensor}）"
+        if trunc:
+            summary += f" · {trunc} trunc"
+        if forged:
+            summary += f" · {forged} forged"
+        self._frame(
+            "v2x:cpm",
+            {"rows": rows[:20], "total": len(rows), "ghosts": ghosts,
+             "ghosts_sensor": ghosts_sensor, "truncated": trunc, "forged": forged},
+            summary=summary, delta=delta,
+        )
 
     def _update_detector(self) -> None:
         det = self.sim.detector

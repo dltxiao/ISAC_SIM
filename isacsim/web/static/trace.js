@@ -37,6 +37,7 @@
     { id: "overview", label: "总览", groups: ["Scene", "Network", "Detection", "Defense"] },
     { id: "sensing", label: "感知", groups: ["Sensors"] },
     { id: "vehicles", label: "车辆", groups: ["Vehicles"] },
+    { id: "v2x", label: "V2X", groups: ["V2X"] },
     { id: "core", label: "核心网", groups: ["Core"] },
     { id: "platform", label: "平台", groups: ["Platform"] },
     { id: "attacks", label: "攻击", groups: ["Attacks"] },
@@ -245,6 +246,7 @@
     if (name === "ghost") return row[name] ? `<span class="flag">GHOST</span>` : "—";
     if (name === "affected") return row[name] ? `<span class="flag warn">AFFECTED</span>` : "—";
     if (name === "flags") return row[name] ? `<span class="flag warn">${esc(row[name])}</span>` : "—";
+    if (name === "truncated") return row[name] ? `<span class="flag warn">TRUNC</span>` : "—";
     const v = row[name];
     if (typeof v === "number") return fmt(v, 2);
     return esc(short(v));
@@ -335,13 +337,15 @@
     const s = state.snap || {};
     const f = (s.frames || {})[t.id];
     const kindCls = t.group === "Attacks" ? "attack" : "";
+    // CPM 表列多，独占一整行；否则半宽卡片会把后面的列裁掉。
+    const wide = t.id === "v2x:cpm" ? " merged" : "";
     let body = `<div class="card-empty">等待数据…</div>`;
     if (f) {
       if (t.kind === "table") body = tableHTML(t, f);
       else if (t.kind === "event") body = eventHTML(t, f);
       else body = structHTML(t, f);
     }
-    return `<article class="card ${kindCls}" data-card="${esc(t.id)}">
+    return `<article class="card ${kindCls}${wide}" data-card="${esc(t.id)}">
       <div class="card-head">
         <span class="ctitle">${esc(t.label)}</span>
         <span class="tag ${kindCls}">${esc(t.kind)}</span>

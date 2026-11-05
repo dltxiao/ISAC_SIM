@@ -216,13 +216,13 @@ P4 control.command 的 ttc_s>=10，且它不是由任何合法 CPM/DENM 目标�
 | QoS 降级 | 右栏 **TRACE** 的 `core.qos` 事件 → **DETAIL** | `qos_flow_modify`、`5qi=9`、`old_5qi=79`（`gfbr_kbps` 不在事件白名单，去 `out/`） |
 | SMF 状态 | **核心网** → `核心网 · Core` 卡 → 子标签「节点」 | SMF 节点变橙，悬停 reasons 含 `degraded QoS 1`；指标里没有 `degraded_sessions` |
 | 会话表 | **核心网** → 子标签「会话」 | 受害 UE 行的 `five_qi=9`、`gfbr_kbps=100`；会话数 >40 时可能被截断 |
-| 降级 CPM | 右栏 `v2x.cpm.forged` 事件 | `sender=ATK-A6`、`degraded=true`、`delay_ms=120`、`lost=true`、`qos=5qi-9` |
+| 降级 CPM | **V2X** → `CPM · broadcast summary` 卡的 `ATK-A6` 行；右栏 `v2x.cpm.forged` 事件 | 卡上 `flags` 列显示 `DEGRADED,LOST`、`delay_ms=120`；事件额外带 `qos=5qi-9` |
 | 平台延迟 | **平台** → `平台 · V2X` 卡（概览）；右栏 `app.ingest` | `ingest_slow` 上升；`latency_ms≈82` |
 | 制动 | **车辆** → `<victim> · state`；右栏 `control.command` | `decel=2.0`、`ttc=99`、`speed_drop` |
 | 告警 | **总览** → `Detector · alerts`；**底栏时间轴** | `qos_downgrade`、`ingest_latency_spike`、`brake_without_hazard` |
 | 阶段 | 顶栏 **下一步** 后的检查点横幅 | S1 5QI 79→9（core 层后）→ S2 CPM 降级 → S3 Ingest 延迟 → S4 云控 → S5 告警 |
 
-不在 `/trace` 上的：CPM 的 `objects[]` 原文、`gfbr_kbps`、UPF 队列（不存在）、5QI 的历史曲线。
+不在 `/trace` 上的：CPM 的 `objects[]` 原文（卡片只给条数与标记）、`gfbr_kbps`、UPF 队列（不存在）、5QI 的历史曲线。
 
 ### 8.3 对应后端 `out/` 的位置
 

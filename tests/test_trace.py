@@ -111,6 +111,55 @@ def test_trace_global_targets_without_attack():
     assert snap["frames"]["net:pc5"]["values"]["cbr"] >= 0.0
 
 
+def test_trace_cpm_summary_without_attack():
+    scene = _scene(4.0, seed=9)
+    sim = Simulation(scene, run_id="trace-cpm", detector=ReferenceDetector(scene),
+                     trace=True)
+    sim.run()
+    snap = sim.trace.snapshot()
+    ids = {t["id"] for t in snap["targets"]}
+    assert "v2x:cpm" in ids
+    frame = snap["frames"]["v2x:cpm"]["values"]
+    assert frame["rows"] and frame["total"] >= 1
+    assert any(r["sender"] == "RSU-01" for r in frame["rows"])
+    for row in frame["rows"]:
+        assert row["object_count"] >= row["carried"]
+        assert row["carried"] <= 12
+        assert row["ghost_in_cpm"] == 0
+        assert row["ghosts_sensor"] == 0
+        assert row["truncated"] == (row["object_count"] > row["carried"])
+    # CPM 是 10 Hz 流，不应逐条进事件环
+    assert not any(e["kind"] == "v2x.cpm" for e in sim.trace.events)
+
+
+def test_cpm_ghost_count_uses_sensor_objects():
+    scene = _scene(2.0, seed=9)
+    sim = Simulation(scene, run_id="trace-cpm-ghost",
+                     detector=ReferenceDetector(scene), trace=True)
+    svc = sim.trace
+    svc.sim.sensing.last_objects["RSU-01"] = [
+        {"object_id": 1, "entity": "veh:a"},
+        {"object_id": 9000, "entity": "ghost:9000"},
+    ]
+    assert svc._cpm_ghost_count("RSU-01", [{"object_id": 9000}]) == 1
+    assert svc._cpm_ghost_count("RSU-01", [{"object_id": 1}]) == 0
+    # 攻击者 CPM 没有对应传感器目标列表
+    assert svc._cpm_ghost_count("ATK-A7", [{"object_id": 9000}]) == 0
+
+
+def test_a7_cpm_summary_marks_forged():
+    scene = _scene(5.0, seed=14)
+    sim = Simulation(scene, run_id="trace-a7-cpm",
+                     detector=ReferenceDetector(scene), trace=True)
+    sim.scheduler.submit(AttackSpec(type="A7", amplitude=0.8,
+                                    duration=2.0, start=1.0))
+    sim.run()
+    rows = sim.trace.snapshot()["frames"]["v2x:cpm"]["values"]["rows"]
+    forged = [r for r in rows if r["sender"] == "ATK-A7"]
+    assert forged and forged[0]["forged"] is True
+    assert forged[0]["attack_id"]
+
+
 def test_a1_trace_has_ghost_event_and_attack_target():
     scene = _scene(6.0, seed=14)
     sim = Simulation(scene, run_id="trace-a1", detector=ReferenceDetector(scene),

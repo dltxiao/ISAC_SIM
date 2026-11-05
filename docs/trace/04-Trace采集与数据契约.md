@@ -37,6 +37,8 @@ Trace 不是“再写一遍仿真”，而是从现有代码的少数稳定接�
 | `v2x.cam.clone` | TraceService | A4 伪标识 CAM | 是 |
 | `v2x.cpm.forged` | TraceService | A6/A7 伪造/降级 CPM | 是 |
 
+> `v2x.cpm` 本身**不产生事件**：10 Hz × 3 RSU 会挤掉攻击事件；它被投影成全局表 `v2x:cpm`（每个 sender 最新一条摘要），只有 `forged/degraded` 才额外产生 `v2x.cpm.forged` 事件。
+
 **规划中但未实现**：`session.start/end`、`attack.stage`、`hook.before/after/drop`、`watch.delta`、`trace.error`、`truth`。
 当前 StepFrame 的 `reason` 承担 stage 语义，没有独立 `attack.stage` 事件。
 
@@ -119,7 +121,8 @@ Trace 不是“再写一遍仿真”，而是从现有代码的少数稳定接�
 当前规则：
 
 - `TraceStore.frames[target_id]` 只保留**最新一帧**，不是每 target 600 帧历史；
-- 表 target 的 `values.rows` 有上限（sensors 80、fleet 40、core tables 40）；
+- 表 target 的 `values.rows` 有上限（sensors 80、fleet 40、core tables 40、`v2x:cpm` 20）；
+- `v2x:cpm` 只保留**每个 sender 的最新一条** CPM（不存历史），10 Hz 节流后更新；`object_count` 是全量条数，`carried` 是摘要实际带的条数（≤12），`truncated` 表示两者不一致；
 - `delta` 没有 `mode` 字段；表差异按 key 计算 added/removed/changed；
 - `status` 当前为 `new`/`changed`，没有 `same/stale/error`；
 - 规划中的 `schema`、`run_id`、`baseline`、`refs` 未实现。

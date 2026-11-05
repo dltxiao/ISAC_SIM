@@ -37,8 +37,9 @@
 - **`/trace` 会话与注入**：追踪页顶栏增加开始/停止；A1–A10 注入改为“类型下拉 + 强度 + 时长 + 注入”条；运行中注入自动冻结，保证 S0 可单步。
 - **`/trace` 中栏分组与合并卡**：中栏改为“总览/感知/车辆/核心网/平台/攻击”标签；4 个传感器合并为标签卡；核心网合并为“节点健康矩阵 + UE/会话/流表”；平台合并为“概览/Token/订阅”；左栏点击自动切组定位。
 - **`/trace` 表格可读性**：数值列的表头与数值同边右对齐（ID 类列保持左对齐）、列宽按内容收紧、表头吸顶、斑马纹与整行悬停高亮，暗色无竖线时也能对上表头与数据列。
+- **`/trace` CPM 摘要表**：新增全局 target `v2x:cpm`（V2X 标签 → `CPM · broadcast summary`），一行一个 sender 只保留**最新一条** CPM；显示 `object_count/carried/ghost_in_cpm/truncated/attack/flags(FORGED/DEGRADED/LOST)/delay_ms/cbr`。幽灵按 `object_id` 回查 `sensing.last_objects`，摘要截断（>12 条）标 `TRUNC`；CPM 不逐条进事件环，避免 30 条/s 挤掉攻击证据。
 - **移除复位**：主控制台取消复位按钮、`/api/session/reset` 与 `SessionManager.reset`；复位原本等价于停止后按原参数开始，重跑改为“停止 → 开始”。
-- **测试**：新增 A1–A10 profile、事件桥、capabilities 与“无攻击不产生雷达事件”测试；全量 **89 项 pytest 通过**。
+- **测试**：新增 A1–A10 profile、事件桥、capabilities 与“无攻击不产生雷达事件”测试；全量 **97 项 pytest 通过**。
 
 ### 文档
 
