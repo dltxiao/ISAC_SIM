@@ -156,7 +156,79 @@ subscription_tamper ×1, nef_subscription_tamper ×1,
 ingest_latency_spike ×3, brake_without_hazard ×1
 ```
 
-## 8. 时序
+## 8. 外部检测视角：数据支撑、`/trace` 位置与 `out/` 落点
+
+> 本节假设判定在仿真之外完成：只看导出的观测流与日志，不读 `truth/`、不读 `ctx.extras`。可观测面清单与路径/落盘规则见 [A1 §9.1、§9.4](A1-感知篡改诱导通信拥塞.md)。
+
+### 8.1 判定 A8 需要的数据支撑
+
+A8 先拿到 NEF token、建一个指向外部回调的订阅，再把平台默认订阅撤掉，于是平台“看不见” DENM/SPaT；随后再补一条无依据的制动。判定要把“订阅变更”和“平台漏事件”对齐。
+
+| 观测面 | 需要捕获的字段 | 在判定中的作用 | 可依赖度 |
+|---|---|---|---|
+| `core.nef` | `msg_type`、`token_id`、`subscription_id`、`event_types`、`callback`、`result`、`subject` | `token_issue(subject=attacker:A8)` → `api_subscribe(callback=https://evil.local/events)` → `api_unsubscribe accept` | 协议证据（关键） |
+| `app.subscription` | `action`、`result`、`subscription_id`、`event_types` | 平台默认订阅 `action=revoke, result=accept`，活动订阅数下降 | 协议证据（关键） |
+| `app.ingest` | `result`、`cause`、`msg_type`、`source` | `result=dropped`、`cause=no_subscription` 激增，且按 `msg_type` 分布 | 物理证据（关键） |
+| `v2x.denm` / `v2x.spat` | `sender_pseudo`、`msg_type`、`cause` | 空口仍有消息 → 平台侧漏事件，不是空口丢包 | 反证（关键） |
+| `control.command` | `params.ttc_s`、`src` | `ttc=99`、`src=attacker:ctl-*` | 物理/协议证据 |
+| `link.metrics` | `cbr`、`jam` | 不变 → 排除 A1/A2 | 反证 |
+
+判定口径：
+
+```text
+R1 core.nef 出现 api_unsubscribe accept，且 token 主体不是平台租户（attacker:A8）、
+   回调指向外部域（如 https://evil.local/events）。
+R2 app.subscription 出现 revoke accept，active 订阅数下降到 0。
+R3 同一 msg_type（denm/spat）在 v2x.* 仍有记录，但 app.ingest 的
+   result=dropped/cause=no_subscription 激增。
+R4 control.command 的 ttc_s>=10。
+=> R1∧R2 判“订阅篡改”；R3 是后果证据（平台视野缺失）；R4 是放大器。
+```
+
+边界：
+
+- 没有真实 NEF HTTP 调用与回调投递，`callback` 只是记录字段；
+- `stop()` 只恢复平台订阅（重新订阅 cpm/denm/spat），**不**撤销 NEF token，也不恢复 NEF 订阅；`out/` 末尾会多一条 `app.subscription subscribe`；
+- `app.ingest.result=dropped` 是平台侧“没有活动订阅”，不是空口丢包；
+- 平台延迟是全局的（80 ms），不只是 DENM/SPaT；
+- `amplitude` 对 A8 无效。
+
+### 8.2 对应前端 `/trace` 的位置
+
+| 数据 | `/trace` 位置 | 看什么 |
+|---|---|---|
+| NEF 退订 | **核心网** → `核心网 · Core` 卡 → 子标签「节点」的 NEF 节点；右栏 `core.nef` 事件 | NEF 指标里 `unsubscribed` 上升（本剧本不撤销 token，`revoked` 仍为 0）、红点 reasons `unsubscribed 1`；事件 `api_unsubscribe accept`（`callback` 不在事件白名单） |
+| 平台订阅 | **平台** → `平台 · V2X` 卡 → 子标签「订阅」 | `sub-0001` 的 `state=REVOKED`；`callback` 列显示平台侧回调 |
+| 漏事件 | 平台概览 `ingest_dropped`；右栏 `app.ingest` 事件 | `result=dropped`、`cause=no_subscription` |
+| 制动 | **车辆** → `<victim> · state`；右栏 `control.command` | `decel=2.5`、`ttc=99` |
+| 告警 | **总览** → `Detector · alerts`；**底栏时间轴** | `subscription_tamper`、`nef_subscription_tamper`、`ingest_latency_spike`、`brake_without_hazard` |
+| 阶段 | 顶栏 **下一步** 后的检查点横幅 | S1 NEF 退订 → S2 平台订阅撤销 → S3 平台漏事件 → S4 云控 → S5 告警 |
+
+不在 `/trace` 上的：NEF 的 `callback` 地址（不在事件字段白名单，只有 `out/core.nef.jsonl` 有）、NEF 订阅表（「订阅」表只显示平台侧）、`v2x.spat` 全量。
+
+### 8.3 对应后端 `out/` 的位置
+
+| 数据 | 文件 | 过滤键 / 字段 | 备注 |
+|---|---|---|---|
+| NEF 退订 | `core.nef.jsonl` | `.payload.msg_type=="api_unsubscribe"`、`result=="accept"` | 同文件有 `token_issue`/`api_subscribe` |
+| 可疑回调 | `core.nef.jsonl` | `.payload.callback` | `https://evil.local/events` |
+| 平台订阅撤销 | `app.subscription.jsonl` | `.payload.action=="revoke"`、`result=="accept"` | 末尾还有恢复订阅 |
+| 平台漏事件 | `app.ingest.jsonl` | `.payload.result=="dropped"`、`.payload.cause=="no_subscription"` | 按 `msg_type` 分组 |
+| 空口对照 | `v2x.denm.jsonl` / `v2x.spat.jsonl` | 同窗口仍有记录 | 证明不是空口丢 |
+| 制动 | `control.command.jsonl` | `.payload.params.decel_mps2==2.5` | |
+| 真值（评估侧） | `truth/events.jsonl` | `.campaign=="A8"` | `params.unsubscribed/token` |
+| 告警 | `alerts.jsonl` | `subscription_tamper` / `nef_subscription_tamper` / `ingest_latency_spike` | 仅 CLI/batch |
+
+```bash
+cd out/doc_a8/arterial-14-*
+jq -c 'select(.payload.msg_type=="api_subscribe") | {sub:.payload.subscription_id, cb:.payload.callback, et:.payload.event_types}' core.nef.jsonl
+jq -c 'select(.payload.action=="revoke") | {sub:.payload.subscription_id, et:.payload.event_types}' app.subscription.jsonl
+jq -c 'select(.payload.result=="dropped") | .payload.msg_type' app.ingest.jsonl | sort | uniq -c
+```
+
+> A8 的判定关键是“平台侧看不见、空口侧还看得见”：只对比 `app.ingest` 会以为消息丢了，必须拿 `v2x.*` 做对照。
+
+## 9. 时序
 
 | 相对 `t0` | 事件 |
 |---:|---|
@@ -166,7 +238,7 @@ ingest_latency_spike ×3, brake_without_hazard ×1
 | +0.1 | 平台延迟告警 |
 | `t1` | 平台若没有 denm 订阅，重新订阅 cpm/denm/spat |
 
-## 9. 边界与差异
+## 10. 边界与差异
 
 1. **不是真实 NEF**：没有 HTTP 回调、没有通知投递。
 2. **`stop` 只恢复平台订阅**：不撤销 NEF token，也不恢复 NEF 订阅；`core:nef` 里那条 `api_unsubscribe` 仍保持 REVOKED。
@@ -175,7 +247,7 @@ ingest_latency_spike ×3, brake_without_hazard ×1
 5. **`amplitude` 无效**：A8 的订阅/延迟/制动固定。
 6. **A8 没有 `stop()` 外的清理**：如果 cancel，只置 finished，平台订阅可能保持撤销。
 
-## 10. 复现与检查
+## 11. 复现与检查
 
 ```bash
 .venv/bin/python -m isacsim run \
@@ -192,7 +264,7 @@ ingest_latency_spike ×3, brake_without_hazard ×1
 | `truth/events.jsonl` | `params.unsubscribed/token` |
 | `alerts.jsonl` | `subscription_tamper`、`nef_subscription_tamper` |
 
-## 11. 代码索引
+## 12. 代码索引
 
 | 作用 | 位置 |
 |---|---|
@@ -204,7 +276,7 @@ ingest_latency_spike ×3, brake_without_hazard ×1
 | A8 真值链 | `isacsim/truth/model.py:40` |
 | A8 profile | `isacsim/trace/profiles.py:325` |
 
-## 12. 小结
+## 13. 小结
 
 ```text
 NEF 订阅 → 退订（api_unsubscribe）

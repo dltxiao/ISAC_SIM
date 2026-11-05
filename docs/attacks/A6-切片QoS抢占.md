@@ -174,7 +174,77 @@ seed=14、a=0.8、3 s 攻击：
 qos_downgrade ×1, ingest_latency_spike ×3, brake_without_hazard ×1
 ```
 
-## 8. 时序
+## 8. 外部检测视角：数据支撑、`/trace` 位置与 `out/` 落点
+
+> 本节假设判定在仿真之外完成：只看导出的观测流与日志，不读 `truth/`、不读 `ctx.extras`。可观测面清单与路径/落盘规则见 [A1 §9.1、§9.4](A1-感知篡改诱导通信拥塞.md)。
+
+### 8.1 判定 A6 需要的数据支撑
+
+A6 的注入点是“切片/QoS + 平台延迟 + 一条伪造 CPM + 一次小制动”。QoS 只有语义状态（没有真实队列/调度），所以外部系统应以**QoS 修改事件**为主线，用平台延迟和制动做因果闭环。
+
+| 观测面 | 需要捕获的字段 | 在判定中的作用 | 可依赖度 |
+|---|---|---|---|
+| `core.qos` | `msg_type`、`ue_id`、`pdu_session_id`、`5qi`、`old_5qi`、`gfbr_kbps`、`qfi` | `qos_flow_modify` 把 5QI 79→9、GFBR 1000→100；恢复时 9→79 | 协议证据（关键） |
+| `app.ingest` | `latency_ms`、`msg_type`、`source` | 平台 ingest 82 ms（全局） | 物理证据 |
+| `v2x.cpm` | `sender`、`degraded`、`forged`、`delay_ms`、`lost`、`qos`、`objects[]` | 一条 `ATK-A6` 的降级 CPM，`delay_ms=120`、`lost=true`、`qos=5qi-9` | `forged/degraded` 是标记；`delay_ms/lost` 是协议字段 |
+| `control.command` | `params.decel_mps2`、`params.ttc_s`、`src` | `ttc=99`、`decel=2.0`、`src=attacker:ctl-*` | 物理/协议证据 |
+| `link.metrics` | `cbr`、`jam` | 不变 → 排除 A1/A2 | 反证 |
+| `core.upf` | `route`、`msg_type` | 不变 → 排除 A7 | 反证 |
+
+判定口径：
+
+```text
+P1 core.qos 出现 qos_flow_modify 且 5qi<=9（V2X 切片正常是 79）→ QoS 降级。
+P2 同一会话 gfbr_kbps 从 1000 跌到 100 → 带宽承诺下降。
+P3 app.ingest.latency_ms >= 50（本例 82）→ 平台侧变慢。
+P4 control.command 的 ttc_s>=10，且它不是由任何合法 CPM/DENM 目标推导出来的（A6 的 CPM 是伪造/降级，且没进平台 ingest）。
+=> P1∧P2 判“切片降级”；叠加 P3 判 A6；P4 用于归因，不单独判。
+```
+
+边界：
+
+- QoS 只有语义状态：没有真实队列、没有按 5QI 调度，`upf:queue_up` 这个真值环节不存在；
+- 平台延迟是全局的，所有 CPM/DENM/SPaT 都慢 80 ms；
+- 伪造 CPM 是直接 `emit`，**不进** `v2x_outbox`，所以平台不会自动 ingest 它——`app.ingest` 里没有这条 CPM，不能拿“平台没有记录”否定它；
+- `amplitude` 对 A6 **无效**：5QI/延迟/制动都是固定值；
+- 恢复时还会有一条 `qos_flow_modify`（9→79），不要把它当成第二次攻击。
+
+### 8.2 对应前端 `/trace` 的位置
+
+| 数据 | `/trace` 位置 | 看什么 |
+|---|---|---|
+| QoS 降级 | 右栏 **TRACE** 的 `core.qos` 事件 → **DETAIL** | `qos_flow_modify`、`5qi=9`、`old_5qi=79`（`gfbr_kbps` 不在事件白名单，去 `out/`） |
+| SMF 状态 | **核心网** → `核心网 · Core` 卡 → 子标签「节点」 | SMF 节点变橙，悬停 reasons 含 `degraded QoS 1`；指标里没有 `degraded_sessions` |
+| 会话表 | **核心网** → 子标签「会话」 | 受害 UE 行的 `five_qi=9`、`gfbr_kbps=100`；会话数 >40 时可能被截断 |
+| 降级 CPM | 右栏 `v2x.cpm.forged` 事件 | `sender=ATK-A6`、`degraded=true`、`delay_ms=120`、`lost=true`、`qos=5qi-9` |
+| 平台延迟 | **平台** → `平台 · V2X` 卡（概览）；右栏 `app.ingest` | `ingest_slow` 上升；`latency_ms≈82` |
+| 制动 | **车辆** → `<victim> · state`；右栏 `control.command` | `decel=2.0`、`ttc=99`、`speed_drop` |
+| 告警 | **总览** → `Detector · alerts`；**底栏时间轴** | `qos_downgrade`、`ingest_latency_spike`、`brake_without_hazard` |
+| 阶段 | 顶栏 **下一步** 后的检查点横幅 | S1 5QI 79→9（core 层后）→ S2 CPM 降级 → S3 Ingest 延迟 → S4 云控 → S5 告警 |
+
+不在 `/trace` 上的：CPM 的 `objects[]` 原文、`gfbr_kbps`、UPF 队列（不存在）、5QI 的历史曲线。
+
+### 8.3 对应后端 `out/` 的位置
+
+| 数据 | 文件 | 过滤键 / 字段 | 备注 |
+|---|---|---|---|
+| QoS 降级/恢复 | `core.qos.jsonl` | `.payload.msg_type=="qos_flow_modify"`；看 `5qi`/`old_5qi`/`gfbr_kbps` | 两条：9 和 79 |
+| 降级 CPM | `v2x.cpm.jsonl` | `.payload.sender=="ATK-A6"`、`.payload.degraded==true` | `objects[].object_id==6001` |
+| 平台延迟 | `app.ingest.jsonl` | `.payload.latency_ms>=50` | 82 |
+| 制动 | `control.command.jsonl` | `.payload.params.decel_mps2==2.0`、`ttc_s==99` | |
+| 真值（评估侧） | `truth/events.jsonl` | `.campaign=="A6"` | `params.5qi_from/5qi_to` |
+| 告警 | `alerts.jsonl` | `qos_downgrade` / `ingest_latency_spike` / `brake_without_hazard` | 仅 CLI/batch |
+
+```bash
+cd out/doc_a6/arterial-14-*
+jq -c 'select(.payload.msg_type=="qos_flow_modify")
+       | {ue:.payload.ue_id, q5:.payload["5qi"], old:.payload["old_5qi"], gfbr:.payload.gfbr_kbps}' core.qos.jsonl
+jq -c 'select(.payload.sender=="ATK-A6") | .payload | {delay_ms, lost, qos}' v2x.cpm.jsonl | head -3
+```
+
+> A6 的“状态表”证据（`core:sessions` 的 `five_qi`）来自内存快照，`out/` 没有快照文件；离线复盘要用 `core.qos` 事件重放会话 QoS。
+
+## 9. 时序
 
 | 相对 `t0` | 事件 |
 |---:|---|
@@ -184,7 +254,7 @@ qos_downgrade ×1, ingest_latency_spike ×3, brake_without_hazard ×1
 | +0.17 | SUMO slowDown 落地 |
 | `t1` | 恢复 5QI=79/1000；清除延迟 |
 
-## 9. 边界与差异
+## 10. 边界与差异
 
 1. **QoS 只有语义状态**：没有真实队列/调度器按 5QI 降速。
 2. **平台延迟是全局的**：所有 ingest 都慢，不是只针对 CPM。
@@ -193,7 +263,7 @@ qos_downgrade ×1, ingest_latency_spike ×3, brake_without_hazard ×1
 5. **`amplitude` 基本无效**：A6 的 QoS/延迟/制动都是固定值。
 6. **`stop` 会恢复 QoS**；如果中途 cancel（只置 finished），`stop` 不会执行，QoS 可能保持降级。
 
-## 10. 复现与检查
+## 11. 复现与检查
 
 ```bash
 .venv/bin/python -m isacsim run \
@@ -210,7 +280,7 @@ qos_downgrade ×1, ingest_latency_spike ×3, brake_without_hazard ×1
 | `truth/events.jsonl` | `params.5qi_from/to` |
 | `alerts.jsonl` | `qos_downgrade`、`ingest_latency_spike` |
 
-## 11. 代码索引
+## 12. 代码索引
 
 | 作用 | 位置 |
 |---|---|
@@ -223,7 +293,7 @@ qos_downgrade ×1, ingest_latency_spike ×3, brake_without_hazard ×1
 | A6 真值链 | `isacsim/truth/model.py:39` |
 | A6 profile | `isacsim/trace/profiles.py:282` |
 
-## 12. 小结
+## 13. 小结
 
 ```text
 SMF 5QI 79→9（语义）

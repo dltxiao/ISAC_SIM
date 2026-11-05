@@ -319,6 +319,36 @@ class Simulation:
     def cancel_attack(self, attack_id: str) -> bool:
         return self.scheduler.cancel(attack_id)
 
+    def _ghosts(self) -> list[dict[str, Any]]:
+        """当前被注入到目标列表里的幽灵目标（供 Web 地图叠加）。
+
+        数据源是 sensing 的 last_objects（hook 之后），所以它就是 ADAS
+        真正能看到的东西；同一条幽灵若被多个传感器报告，按 (sensor, entity) 去重。
+        """
+        out: list[dict[str, Any]] = []
+        sensing = getattr(self, "sensing", None)
+        if sensing is None:
+            return out
+        seen: set[tuple[str, str]] = set()
+        for sid, objs in sensing.last_objects.items():
+            for o in objs:
+                ent = str(o.get("entity", ""))
+                if not ent.startswith("ghost:"):
+                    continue
+                key = (sid, ent)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({
+                    "id": ent,
+                    "object_id": o.get("object_id"),
+                    "cls": o.get("cls"),
+                    "x": round(float(o.get("x", 0.0)), 2),
+                    "y": round(float(o.get("y", 0.0)), 2),
+                    "sensor": sid,
+                })
+        return out
+
     def snapshot(self) -> dict[str, Any]:
         vehicles = []
         if self.sumo is not None:
@@ -343,6 +373,7 @@ class Simulation:
                  "range": s.range_m, "fov": s.fov_deg, "yaw": s.yaw_deg}
                 for s in self.scene.sensors
             ],
+            "ghosts": self._ghosts(),
         })
         if self.core is not None:
             snap["core"] = self.core.snapshot()

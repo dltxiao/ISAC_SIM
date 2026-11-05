@@ -223,6 +223,24 @@
     return rows && rows.length ? Object.keys(rows[0]).slice(0, 7) : [];
   }
 
+  // 列对齐：数值列右对齐，标识符/文本列左对齐。
+  // 只按“列”判定，避免同一列里数字和字符串混排时逐格跳动。
+  const ID_COL = /(?:^|_)ids?$/i;   // object_id / session_id / teid 之类
+  function isIdColumn(name) {
+    return ID_COL.test(name) || /^teid$/i.test(name);
+  }
+  function numericColumn(rows, name) {
+    if (isIdColumn(name)) return false;
+    let seen = 0;
+    for (const r of rows) {
+      const v = r[name];
+      if (v === null || v === undefined || v === "") continue;
+      if (typeof v !== "number" || !Number.isFinite(v)) return false;
+      seen += 1;
+    }
+    return seen > 0;
+  }
+
   function cell(row, name) {
     if (name === "ghost") return row[name] ? `<span class="flag">GHOST</span>` : "—";
     if (name === "affected") return row[name] ? `<span class="flag warn">AFFECTED</span>` : "—";
@@ -236,17 +254,26 @@
     const rows = (f.values && f.values.rows) || [];
     if (!rows.length) return `<div class="card-empty">尚无数据</div>`;
     const cols = colNames(target, rows);
+    const shown = rows.slice(0, 40);
+    const numCols = new Set(cols.filter((c) => numericColumn(shown, c)));
+    const clsOf = (c) => (numCols.has(c) ? "num" : "");
     const added = new Set(((f.delta && f.delta.added) || []).map(String));
     let h = `<table class="watch-table"><thead><tr>`;
-    for (const c of cols) h += `<th>${esc(c)}</th>`;
+    for (const c of cols) {
+      const cls = clsOf(c);
+      h += `<th${cls ? ` class="${cls}"` : ""}>${esc(c)}</th>`;
+    }
     h += `</tr></thead><tbody>`;
-    for (const r of rows.slice(0, 40)) {
+    for (const r of shown) {
       const key = String(r[target.key_field || "id"] ?? "");
       const isNew = added.has(key);
       const isGhost = !!r.ghost;
       h += `<tr class="${isNew ? "new" : ""} ${isGhost ? "ghost" : ""}"
               data-raw="${esc(encodeURIComponent(JSON.stringify(r)))}">`;
-      for (const c of cols) h += `<td class="${typeof r[c] === "number" ? "num" : ""}">${cell(r, c)}</td>`;
+      for (const c of cols) {
+        const cls = clsOf(c);
+        h += `<td${cls ? ` class="${cls}"` : ""}>${cell(r, c)}</td>`;
+      }
       h += `</tr>`;
     }
     h += `</tbody></table>`;

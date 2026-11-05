@@ -3,6 +3,7 @@
 > 代码基线：`feature/trace-watch`（v0.3.0 + A1–A10 TraceProfile），2026-11-03。
 > 本目录按“代码走读”方式解释每个攻击剧本：入口、选目标、注入点、下游消费、真值、检测、时序、边界与复现。
 > 共享机制（`AttackSpec`、调度器、HookBus、`ctx.emit`、真值落盘）以 [A1](A1-感知篡改诱导通信拥塞.md) §2–§4 为准，A2–A10 只写差异。
+> 每篇另有一节“外部检测视角”（A1 为 §9，A2–A10 为 §8）：判定该攻击需要采什么数据、在 `/trace` 的哪个位置看、在 `out/` 的哪个文件里找。
 
 ## 文档索引
 
@@ -34,6 +35,25 @@
 | A9 | 复用合法租户 token；批量云控制动 | 多车同时减速 | S0–S5 |
 | A10 | 雷达渐偏 + 轻度信令 + 审计抑制 + 小制动 | 隐蔽组合；审计缺口 | S0–S5 |
 
+## 外部检测视角速查
+
+如果由**仿真之外**的系统判定（安全运营平台、5G-A-NIDD 侧模型、离线复盘），每类攻击的核心可观测证据与落点如下。表中文件都在 `out/<run>/` 下；`alerts.jsonl` 只在 CLI `run` 与 `batch` 落盘，Web 会话的告警只在 `/trace`。
+
+| 编号 | 核心证据（外部可观测） | `/trace` 主入口 | `out/` 主文件 | 详节 |
+|---|---|---|---|---|
+| A1 | 单 RSU 新增静止幽灵；`offered`↑而`jam=0`；ADAS `ttc` 制动 | 感知→目标列表；总览→PC5；右栏 `control.command` | `sensing.objects` / `v2x.denm` / `link.metrics` / `control.command` | §9 |
+| A2 | `jam>0` + `ttc=99` 的无依据制动（停止牌与地图不符是佐证） | 感知→目标列表；总览→PC5；右栏 `control.command` | `sensing.objects` / `link.metrics` / `control.command` | §8 |
+| A3 | 回波 `range` 与位置测量的残差单调上升 | 右栏 `radar.echo`/`radar.track`；车辆 state | `sensing.radar.echo` / `sensing.radar.track` + `scenario.json` | §8 |
+| A4 | 同一伪名位置跳变 / CAM–GNSS 不符 + 指纹与 victim 一致 | 右栏 `record.clone`/`v2x.cam.clone`；Detector alerts | `auth.cert` / `auth.fingerprint` / `v2x.cam` / `sensing.gnss` | §8 |
+| A5 | 注册速率≈500/s + `app.ingest` 202 ms + 单车辆云控 | 核心网 AMF 节点；平台概览；右栏 `core.nas`/`app.ingest` | `core.nas` / `core.session` / `app.ingest` / `control.command` | §8 |
+| A6 | 5QI 79→9、GFBR 1000→100 + `app.ingest` 82 ms | 右栏 `core.qos`；核心网会话表；平台概览 | `core.qos` / `v2x.cpm` / `app.ingest` | §8 |
+| A7 | `route=dn:EVIL-01` + `provenance` 不符 | 核心网 UPF/DN 节点、流表；右栏 `app.ingest` | `core.upf` / `app.ingest` / `v2x.cpm` | §8 |
+| A8 | NEF 退订 + 平台订阅 revoke + `app.ingest` dropped | 核心网 NEF 节点；平台订阅；右栏 `app.ingest` | `core.nef` / `app.subscription` / `app.ingest` | §8 |
+| A9 | 合法 token 批量云控（≥3 车、高频）+ `ttc=99` | 平台 Token；右栏 `app.control`/`app.audit`/`control.command` | `app.auth` / `app.control` / `app.audit` / `control.command` | §8 |
+| A10 | 雷达弱偏 + 25/s 轻度信令 + `audit_seq` 缺口 + 小制动 | 核心网 AMF；平台概览；右栏 `app.audit`/`control.command` | `sensing.radar.*` / `core.nas` / `app.audit` / `control.command` | §8 |
+
+> 注意：`/trace` 是内存投影（含 `ghost.added`、`vehicle.speed_drop`、`record.clone` 等派生事件），`out/` 是原始记录；两边字段粒度不对等，逐项对照见各篇对应小节。
+
 ## 共同代码路径
 
 ```text
@@ -60,11 +80,12 @@ scheduler → sensing → v2x → uu → core → auth → platform → control 
 - `control.tick()` 在 v2x 之后，ADAS 自己产生的 `brake_events` 不会回到同一 tick 的 v2x；
 - A2/A3/A6/A7/A8/A10 直接调用 `control.inject_brake()`，所以不依赖 ADAS。
 
-## 读文档前需要知道的三件事
+## 读文档前需要知道的四件事
 
 1. **真值 `stages` 是计划，不是运行时开关**。代码里没有“到 S3 才执行”的分支；阶段只用于讲解和 TraceProfile。
 2. **`domains` 是声明**。某个 seed 下如果目标不满足条件，声明的域仍可能出现“没有对应事件”的情况。
 3. **本目录的实测数字来自 seed=14、`amplitude=0.8`、`start=2.0`、`duration=3.0` 的一次本机运行**；换 SUMO 版本、路网或车流后绝对值会变，但代码路径和字段不变。
+4. **`/trace` 与 `out/` 不是同一份数据**。`/trace` 是进程内的内存投影（`ghost.added`、`pc5.rise`、`vehicle.speed_drop`、`record.clone` 等派生事件只在页面里），`out/` 是原始观测记录；类别、字段和缺失规则都不同，逐项对照见各篇的“外部检测视角”一节。
 
 ## 复现入口
 

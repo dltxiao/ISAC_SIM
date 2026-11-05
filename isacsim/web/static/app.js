@@ -127,6 +127,7 @@
     }
     drawLanes();
     drawSensors();
+    if (state) drawGhosts();
     if (state) drawVehicles();
     if (selected) drawSelection();
     if (viewMode === "overlay") {
@@ -245,6 +246,52 @@
         ctx.beginPath();
         ctx.arc(0, 0, Math.max(l, w) * 0.85, 0, Math.PI * 2);
         ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+
+  const GHOST_COLOR = "#e05a5a";
+
+  // 幽灵目标：来自 sensing.objects 注入（A1 障碍物 / A2 停止牌），
+  // 它们是静止世界坐标，所以按快照里的 x/y 直接画，不跟车走。
+  function drawGhosts() {
+    const list = (state && state.ghosts) || [];
+    for (const g of list) {
+      const [sx, sy] = toScreen(g.x, g.y);
+      ctx.save();
+      // 虚线圈 = 单传感器确认、未经多 RSU 互证（与 detector 的 ghost_object 规则同义）
+      ctx.strokeStyle = "rgba(224,90,90,.5)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.arc(sx, sy, 13, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (g.cls === "stop_sign") {
+        const r = 9;
+        ctx.beginPath();
+        for (let i = 0; i < 8; i++) {
+          const a = Math.PI / 8 + (i * Math.PI) / 4;
+          const px = sx + r * Math.cos(a), py = sy + r * Math.sin(a);
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.fillStyle = GHOST_COLOR;
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,.9)";
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 9px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("停", sx, sy + 0.5);
+      } else {
+        ctx.translate(sx, sy);
+        ctx.rotate(Math.PI / 4);
+        ctx.fillStyle = GHOST_COLOR;
+        ctx.fillRect(-5, -5, 10, 10);
       }
       ctx.restore();
     }
@@ -449,6 +496,7 @@
     $("simTime").textContent = fmtTime(s.sim_time);
     $("speedLabel").textContent = `${(s.speed || 1).toFixed(1)}×`;
     $("vehCount").textContent = fmtInt((s.vehicles || []).length);
+    $("ghostCount").textContent = fmtInt((s.ghosts || []).length);
     $("runId").textContent = s.run_id ? `run: ${s.run_id}` : "未启动";
     const running = s.state === "running";
     const paused = s.state === "paused";
@@ -997,6 +1045,19 @@
     return best;
   }
 
+  function pickGhost(ev) {
+    if (!state) return null;
+    const rect = canvas.getBoundingClientRect();
+    const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+    let best = null, bestD = 12;
+    for (const g of state.ghosts || []) {
+      const [sx, sy] = toScreen(g.x, g.y);
+      const d = Math.hypot(sx - mx, sy - my);
+      if (d < bestD) { bestD = d; best = g; }
+    }
+    return best;
+  }
+
   canvas.addEventListener("mousemove", (ev) => {
     const tip = $("tooltip");
     const c = pickCore(ev);
@@ -1014,6 +1075,18 @@
       return;
     }
     coreHover = null;
+    const g = pickGhost(ev);
+    if (g) {
+      hover = null;
+      const rect = canvas.getBoundingClientRect();
+      tip.style.display = "block";
+      tip.style.left = `${ev.clientX - rect.left + 14}px`;
+      tip.style.top = `${ev.clientY - rect.top + 12}px`;
+      tip.innerHTML = `<b>${g.id}</b><br>类型：${g.cls}<br>来源：${g.sensor}<br>
+        坐标：(${g.x.toFixed(1)}, ${g.y.toFixed(1)})<br>状态：伪造/未确认`;
+      canvas.style.cursor = "help";
+      return;
+    }
     const v = pickVehicle(ev);
     hover = v;
     if (!v) { tip.style.display = "none"; canvas.style.cursor = "crosshair"; return; }

@@ -91,7 +91,7 @@ class SessionManager:
     # ------------------------------------------------------------------
     def snapshot(self) -> dict[str, Any]:
         if self.sim is None:
-            return {"state": "idle", "vehicles": [], "records_total": 0,
+            return {"state": "idle", "vehicles": [], "ghosts": [], "records_total": 0,
                     "bytes_total": 0, "streams": {}, "attacks": {}, "attack_instances": [],
                     "alerts": {}, "alert_total": 0, "latency_ms": {}, "truth_events": 0,
                     "sim_time": 0.0, "duration_s": 0.0, "run_id": None}

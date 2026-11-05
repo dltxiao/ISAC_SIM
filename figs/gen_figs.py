@@ -373,7 +373,7 @@ def fig_normal() -> SVG:
     # 控制与任务
     s.card(80, 450, 560, 150, "控制层：ADAS（TTC / AEB）", [
         "对同车道 2–60 m 目标：TTC = 纵向距离 / 相对速度",
-        "TTC < 2.5 s → 制动指令（减速度 3 m/s²，反应延迟 120 ms）",
+        "TTC < 2.5 s → 制动指令（减速度按 TTC 3.0–6.5 m/s²，反应延迟 120 ms）",
         "执行器：sumo.slow_down() 回写 SUMO → 真实减速/排队",
         "正常场景下只在\"真有前车\"时触发",
     ], color=CONTROL, title_size=15, sub_size=10.5)

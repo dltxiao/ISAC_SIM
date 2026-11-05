@@ -24,7 +24,25 @@ class PendingBrake:
 class ControlLayer:
     TTC_THRESHOLD = 2.5
     REACTION_S = 0.12
-    DECEL = 3.0
+    DECEL = 3.0            # 默认/兜底减速度（TTC 接近阈值时的“舒适制动”）
+    BRAKE_S = 1.2          # 单次制动持续时间
+    MIN_SPEED = 1.0        # 不做“刹停”：目标速度保底，避免把车压到 0
+
+    # TTC 越紧迫，减速度越大。制动时长不变，所以仍然是“短促急刹 + 恢复”，
+    # 而不是停车；15 m/s 下最狠一档也只掉 7.8 m/s。
+    DECEL_BY_TTC = (
+        (1.0, 6.5),        # ttc < 1.0 s：接近 AEB 全力制动（0.66 g）
+        (1.5, 5.0),
+        (2.0, 4.0),
+        (TTC_THRESHOLD, 3.0),
+    )
+
+    @classmethod
+    def decel_for_ttc(cls, ttc: float) -> float:
+        for limit, dec in cls.DECEL_BY_TTC:
+            if ttc < limit:
+                return dec
+        return cls.DECEL
 
     def __init__(self, scene: SceneCfg, sensing=None) -> None:
         self.scene = scene
@@ -63,7 +81,8 @@ class ControlLayer:
             ttc, obj = hazard
             if ttc >= self.TTC_THRESHOLD:
                 continue
-            self._command(ctx, v, ttc, reason="ttc", source=f"adas:{v.vid}")
+            self._command(ctx, v, ttc, reason="ttc", source=f"adas:{v.vid}",
+                          decel=self.decel_for_ttc(ttc))
 
     def _apply_intents(self, ctx) -> None:
         """消费平台/外部下发的控制意图；下一 tick 由 ADAS 执行器落地。"""
@@ -103,11 +122,12 @@ class ControlLayer:
         return best
 
     def _command(self, ctx, veh, ttc: float, reason: str, source: str,
-                 *, decel: float | None = None, duration: float = 1.2) -> None:
+                 *, decel: float | None = None, duration: float | None = None) -> None:
         t = ctx.t
         self.last_cmd_t[veh.vid] = t
         self._seq[veh.vid] = self._seq.get(veh.vid, 0) + 1
         dec = self.DECEL if decel is None else decel
+        dur = self.BRAKE_S if duration is None else duration
         ctx.emit("control.command", source, f"veh:{veh.vid}", {
             "src": source,
             "dst": veh.vid,
@@ -119,7 +139,7 @@ class ControlLayer:
             "apply_after_ms": int(self.REACTION_S * 1000),
         })
         self.pending.append(PendingBrake(due_t=t + self.REACTION_S, vid=veh.vid,
-                                         decel=dec, duration=duration))
+                                         decel=dec, duration=dur))
         ctx.extras.setdefault("brake_events", []).append({
             "vid": veh.vid, "x": veh.x, "y": veh.y,
             "cause": "emergency_brake" if reason != "injected" else "injected_brake",
@@ -135,7 +155,9 @@ class ControlLayer:
             veh = ctx.vehicles.get(p.vid)
             if veh is None:
                 continue
-            target = max(0.0, veh.speed - p.decel * p.duration)
+            # 不做“刹停”：保底 MIN_SPEED，慢车只会小幅减速，不会停在幽灵上。
+            floor = min(self.MIN_SPEED, veh.speed)
+            target = max(0.0, veh.speed - p.decel * p.duration, floor)
             if ctx.sumo is not None:
                 ctx.sumo.slow_down(p.vid, target, p.duration)
             self._braking_until[p.vid] = t + p.duration

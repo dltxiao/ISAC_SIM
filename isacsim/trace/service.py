@@ -127,10 +127,12 @@ class TraceService:
         self._last_fleet_t = -1.0
         self._last_pc5_t = -1.0
         self._last_scene_t = -1.0
-        self._last_victim_t = -1.0
 
         self._attacks: dict[str, dict[str, Any]] = {}
-        self._victim_id: str | None = None
+        # 所有需要单独跟踪 state 的车辆（攻击 victim + 被 ADAS 波及的车辆）。
+        # 旧实现只保留第一个 victim，导致第二个受害车的卡片永远“等待数据…”。
+        self._state_ids: set[str] = set()
+        self._last_state_t: dict[str, float] = {}
         self._affected: set[str] = set()
         self._commanded: set[str] = set()
         self._last_cmd: dict[str, dict[str, Any]] = {}
@@ -236,12 +238,15 @@ class TraceService:
                      f"{inst.atype} · {aid}",
                      description=getattr(inst, "label", ""), order=60)
         victim = self._victim_of(inst)
-        if victim and self._victim_id is None:
-            self._victim_id = victim
         if victim:
-            self._target(f"veh:{victim}.state", "struct", "Vehicles",
-                         f"{victim} · state",
-                         description="被攻击/受影响车辆的状态", order=70)
+            self._ensure_state_target(victim)
+
+    def _ensure_state_target(self, vid: str) -> None:
+        """为一个受影响的车辆登记 state 卡片；同一辆车重复调用是幂等的。"""
+        self._state_ids.add(vid)
+        self._target(f"veh:{vid}.state", "struct", "Vehicles",
+                     f"{vid} · state",
+                     description="被攻击/受影响车辆的状态", order=70)
 
     # ------------------------------------------------------------------
     # primitives
@@ -302,6 +307,9 @@ class TraceService:
                     return
                 self._affected.add(vid)
                 self._commanded.add(vid)
+                # A1 的幽灵会让多辆车依次 ADAS 制动；这些“波及车”也要有 state 卡片，
+                # 否则事件指向一个不存在的 target，或在卡片里永远“等待数据…”。
+                self._ensure_state_target(vid)
                 self._last_cmd[vid] = {
                     "seq": p.get("seq"), "reason": p.get("reason"),
                     "decel": (p.get("params") or {}).get("decel_mps2"),
@@ -555,11 +563,9 @@ class TraceService:
         self._evidence_floor = self.seq
         self._ghost_seen.clear()
         self._cbr_rise_reported = False
-        self._commanded.clear()
-        self._affected.clear()
-        self._speed_drop.clear()
-        self._drop_reported.clear()
-        self._last_cmd.clear()
+        # 注意：_commanded/_affected/_speed_drop/_drop_reported/_last_cmd 是“本次运行内
+        # 按车累计”的遥测。不能在这里清空，否则第二起攻击开始后，第一辆受害车的
+        # state 卡片会突然变成 ttc=null / speed_drop=0，看起来像“状态丢了”。
         self._radar_last_tick.clear()
         pc5 = self.frames.get("net:pc5")
         if pc5:
@@ -619,10 +625,8 @@ class TraceService:
                 )
             self._frame(f"atk:{aid}", info,
                         summary=f"{info['type']} · {'结束' if ended else ('进行' if info['started'] else '等待')}")
-            if info["victim"] and self._victim_id is None:
-                self._victim_id = info["victim"]
-                self._target(f"veh:{info['victim']}.state", "struct", "Vehicles",
-                             f"{info['victim']} · state", order=70)
+            if info["victim"]:
+                self._ensure_state_target(info["victim"])
 
     def _update_sensors(self) -> None:
         for sensor in self.sim.scene.sensors:
@@ -690,11 +694,15 @@ class TraceService:
             })
             if drop >= 0.5 and v.vid in self._commanded and v.vid not in self._drop_reported:
                 self._drop_reported.add(v.vid)
+                # drop 是 0.5 s 滑窗的“首次越线”值（0.5–0.8），不是本次制动总降幅；
+                # 把指令减速度一起带上，避免把 -0.6 误读成“只减了 0.6 m/s”。
+                cmd = self._last_cmd.get(v.vid) or {}
                 self._event(
                     "vehicle.speed_drop",
-                    f"{v.vid} speed -{drop:.2f} m/s",
+                    f"{v.vid} speed -{drop:.2f} m/s · cmd {cmd.get('decel')} m/s²",
                     data={"id": v.vid, "drop": round(drop, 3),
-                          "speed": round(float(v.speed), 3)},
+                          "speed": round(float(v.speed), 3),
+                          "decel": cmd.get("decel"), "ttc": cmd.get("ttc")},
                     target_id=f"veh:{v.vid}.state",
                     attack_id=self._attack_for_vehicle(v.vid),
                     severity="effect",
@@ -713,10 +721,14 @@ class TraceService:
                         summary=f"{len(rows)} vehicles · {sum(1 for r in rows if r['affected'])} affected",
                         delta=delta)
 
-        victim = self._victim_id
-        if victim and victim in vehicles and self._t - self._last_victim_t >= 0.1:
-            self._last_victim_t = self._t
-            v = vehicles[victim]
+        # 每辆受影响的车各自一张 state 卡片；不再只跟第一个 victim。
+        for victim in sorted(self._state_ids):
+            v = vehicles.get(victim)
+            if v is None:
+                continue
+            if self._t - self._last_state_t.get(victim, -1.0) < 0.1:
+                continue
+            self._last_state_t[victim] = self._t
             cmd = self._last_cmd.get(victim)
             values = {
                 "id": victim, "speed": round(float(v.speed), 3),

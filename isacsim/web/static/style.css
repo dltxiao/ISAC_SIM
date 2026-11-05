@@ -108,6 +108,7 @@ main { flex: 1; display: grid; grid-template-columns: 1fr 400px; min-height: 0; 
 .dot.rsu { background: var(--accent); }
 .dot.gnb { background: #35c48a; }
 .dot.ghost { background: var(--danger); }
+.legend b { color: var(--danger); font-weight: 600; margin-left: 2px; }
 
 .hint {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);

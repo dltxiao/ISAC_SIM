@@ -187,7 +187,82 @@ nas_registration_flood ×3, ingest_latency_spike ×3,
 brake_without_hazard ×1
 ```
 
-## 8. 时序
+## 8. 外部检测视角：数据支撑、`/trace` 位置与 `out/` 落点
+
+> 本节假设判定在仿真之外完成：只看导出的观测流与日志，不读 `truth/`、不读 `ctx.extras`。可观测面清单与路径/落盘规则见 [A1 §9.1、§9.4](A1-感知篡改诱导通信拥塞.md)。
+
+### 8.1 判定 A5 需要的数据支撑
+
+A5 是“信令层 + 平台层 + 控制层”的组合：伪造注册打满 AMF、拖慢平台 ingest、再用合法租户 token 下发一条云控制动。三块要分别取证，再按时间对齐。
+
+| 观测面 | 需要捕获的字段 | 在判定中的作用 | 可依赖度 |
+|---|---|---|---|
+| `core.nas` | `msg_type`、`ue_id`、`gnb_id`、`result`、`cause`、`bot`、`latency_ms` | 注册请求速率（本例约 500/s）、`result=reject`、`cause=congestion`；`amf_overload enter/clear` | `bot` 是仿真标记；速率/拒绝率是协议证据 |
+| `core.session` | `ue_id`、`msg_type`、`cause`、`result` | 受害车 `pdu_session_establish_reject` | 协议证据 |
+| `app.ingest` | `latency_ms`、`msg_type`、`source`、`result` | 平台 ingest 202 ms（全局），与信令风暴同窗口 | 物理证据 |
+| `app.control` | `token_id`、`vehicle_ids`、`command`、`params`、`result` | 单车辆云控制动，来自合法 tenant token | 协议证据 |
+| `app.auth` / `app.audit` | `msg_type`、`token_id`、`actor`、`action` | token 校验通过、审计记录 `control:submit` | 协议证据 |
+| `control.command` | `src`、`reason`、`params.ttc_s` | `src=platform:V2X-01`、`reason=cloud_control`、`ttc=99` | 物理/协议证据 |
+| `link.metrics` | `cbr`、`jam` | 不直接受影响 → 排除 A1/A2 | 反证 |
+
+判定口径：
+
+```text
+N1 单位时间注册请求显著高于基线（本例 1 s ≥10 条、实际约 500/s），且 ue_id 高度重复/可预测。
+N2 同窗口 core.nas 拒绝率高（cause=congestion），core.session 出现建立拒绝。
+N3 app.ingest.latency_ms 持续 >=50（本例 202），与 N1 同窗口。
+N4 control.command 的 ttc_s>=10、src=platform:*，但前序没有对应的 CPM/DENM 危险事件。
+=> N1∧N3 判 A5；N2 是佐证；N4 是后果与放大器，不是必要条件。
+```
+
+边界：
+
+- `bot=true`、`ue_id=bot-*` 是仿真标记；真实系统看速率、身份熵、拒绝码分布；
+- 标称速率 1640/s 是 `rate` 参数，实际每 0.1 s 最多 50 条（≈500/s）；
+- A5 的 `core.session` 拒绝**不改变会话表**：`core:sessions` 仍显示正常会话，不能拿“会话数没变”否定；
+- 平台延迟是全局的（CPM/DENM/SPaT 全都慢），不是只慢受害车相关消息；
+- 云控指令在 `t0` 就发出，被延迟的是平台 ingest，不是这条指令。
+
+### 8.2 对应前端 `/trace` 的位置
+
+| 数据 | `/trace` 位置 | 看什么 |
+|---|---|---|
+| AMF 过载 | **核心网** → `核心网 · Core` 卡 → 子标签「节点」 | AMF 节点变红/橙，指标 `registered/queue_depth/rejected/received`，悬停看 reasons（`overloaded`/`anomaly`/`load 85%`） |
+| 信令事件 | 右栏 **TRACE** 的 `core.nas` / `core.session` 事件 | 100 ms 聚合，同 key 显示 `×N`；`registration_request reject (congestion)` |
+| 会话被拒 | 同上（`core.session`） | `pdu_session_establish_reject @ ue:<victim>`；注意「会话」表不会变化 |
+| 平台延迟 | **平台** → `平台 · V2X` 卡（概览）+ 右栏 `app.ingest` | `ingest_slow` 上升；事件 `latency_ms≈202` |
+| 云控 | 平台概览 `control_sent`；右栏 `app.control` | `vehicle_ids=[victim]`、`command=brake` |
+| 制动 | **车辆** → `<victim> · state`；右栏 `control.command` | `ttc=99`、`reason=cloud_control`、`speed_drop` |
+| 告警 | **总览** → `Detector · alerts`；**底栏时间轴** | `nas_registration_flood`、`ingest_latency_spike`、`brake_without_hazard` |
+| 阶段 | 顶栏 **下一步** 后的检查点横幅 | S1 AMF 过载/拒绝（core 层后）→ S2 PDU 会话失败 → S3 平台 Ingest/云控 → S4 远控/物理后果 → S5 告警 |
+
+不在 `/trace` 上的：逐条 NAS 记录（按 100 ms 聚合，右栏只保留最近 120 条、显示 50 条）、`uu.attach`/`uu.handover`/`uu.session`（没有投影）、每条请求的排队时延、AMF 的 `load_hint` 明细（节点卡只显示 4 个指标，reasons 里才有）。
+
+### 8.3 对应后端 `out/` 的位置
+
+| 数据 | 文件 | 过滤键 / 字段 | 备注 |
+|---|---|---|---|
+| 注册洪泛 | `core.nas.jsonl` | `.payload.msg_type=="registration_request"`、`.payload.bot==true`、`.payload.result=="reject"` | 按 1 s 窗口计数 |
+| AMF 过载 | `core.nas.jsonl` | `.payload.msg_type=="amf_overload"`（`enter`/`clear`） | 攻击起止两个点 |
+| 会话拒绝 | `core.session.jsonl` | `.payload.msg_type=="pdu_session_establish_reject"` | `ue_id` 是受害车 |
+| 平台延迟 | `app.ingest.jsonl` | `.payload.latency_ms>=50` | 本例 202 |
+| 云控 | `app.control.jsonl` | `.payload.command=="brake"`、`vehicle_ids` 含受害车 | token 是合法租户 token |
+| 鉴权/审计 | `app.auth.jsonl` / `app.audit.jsonl` | `token_validate accept` / `action=="control:submit"` | 与 A9 的区别在 vehicle_ids 规模 |
+| 制动 | `control.command.jsonl` | `.payload.reason=="cloud_control"` | `ttc_s=99` |
+| 真值（评估侧） | `truth/events.jsonl` | `.campaign=="A5"` | `params.bot_ues/rate` |
+| 告警 | `alerts.jsonl` | `nas_registration_flood` / `ingest_latency_spike` / `brake_without_hazard` | 仅 CLI/batch |
+
+```bash
+cd out/doc_a5/arterial-14-*
+jq -c 'select(.payload.bot==true) | .payload.result' core.nas.jsonl | sort | uniq -c
+jq -c 'select(.payload.msg_type=="amf_overload") | {t:.ts_ns, r:.payload.result}' core.nas.jsonl
+jq -c 'select(.payload.msg_type=="pdu_session_establish_reject") | .payload.ue_id' core.session.jsonl | head
+jq -c 'select(.payload.latency_ms>=50) | {lat:.payload.latency_ms, src:.payload.source}' app.ingest.jsonl | head -3
+```
+
+> A5 的“快照类”证据（AMF 健康、队列深度）只在 `/trace` 与内存里；`out/` 只有事件流，需要按 `ts_ns` 重放才能还原当时的健康度。
+
+## 9. 时序
 
 | 相对 `t0` | 事件 |
 |---:|---|
@@ -198,7 +273,7 @@ brake_without_hazard ×1
 | +1.0 | 检测器满足 10 条/s 门槛，报 `nas_registration_flood` |
 | `t1` | `stop()` 清除 AMF 过载与平台延迟 |
 
-## 9. 边界与差异
+## 10. 边界与差异
 
 1. **不是真实注册洪泛**：A5 直接 emit 记录，不创建 UE、不排队、不触发 AUSF 鉴权。
 2. **标称速率不等于实际速率**：每 0.1 s 最多 50 条，实际上限约 500/s。
@@ -208,7 +283,7 @@ brake_without_hazard ×1
 6. **`domains` 含 `task`，但没有专门的 task 事件**；这是声明，不是保证。
 7. **Trace S0**：A5 的 S0 在 `after_scheduler`；如果在连续运行时已经启动攻击再冻结，会错过 S0；从 `/trace` 注入会自动先冻结。
 
-## 10. 复现与检查
+## 11. 复现与检查
 
 ```bash
 .venv/bin/python -m isacsim run \
@@ -226,7 +301,7 @@ brake_without_hazard ×1
 | `truth/events.jsonl` | `params.bot_ues/rate` |
 | `alerts.jsonl` | `nas_registration_flood`、`ingest_latency_spike` |
 
-## 11. 代码索引
+## 12. 代码索引
 
 | 作用 | 位置 |
 |---|---|
@@ -240,7 +315,7 @@ brake_without_hazard ×1
 | A5 真值链 | `isacsim/truth/model.py:34` |
 | A5 profile | `isacsim/trace/profiles.py:261` |
 
-## 12. 小结
+## 13. 小结
 
 ```text
 AMF 过载 + 每 0.1 s 50 条 bot 注册 + 1 条会话拒绝
