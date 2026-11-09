@@ -37,28 +37,30 @@
 </header>
 
 <div class="trace-injectbar">
-  <span class="inject-label">攻击注入</span>
-  <select id="attackType" aria-label="攻击类型">
-    <option value="A1" selected>A1 · 感知数据篡改→通信拥塞</option>
-    <option value="A2">A2 · 物理环境欺骗+控制误导</option>
-    <option value="A3">A3 · 跨层隐蔽（雷达渐偏）</option>
-    <option value="A4">A4 · 双因素仿冒</option>
-    <option value="A5">A5 · 5G-A 信令风暴</option>
-    <option value="A6">A6 · 切片/QoS 抢占</option>
-    <option value="A7">A7 · UPF/N6 流量劫持</option>
-    <option value="A8">A8 · NEF/订阅篡改</option>
-    <option value="A9">A9 · 平台越权/云控注入</option>
-    <option value="A10">A10 · 跨层隐蔽组合</option>
-  </select>
+  <div class="inject-group">
+    <span class="inject-label">攻击注入</span>
+    <select id="attackType" aria-label="攻击类型">
+      <option value="A1" selected>A1 · 感知数据篡改→通信拥塞</option>
+      <option value="A2">A2 · 物理环境欺骗+控制误导</option>
+      <option value="A3">A3 · 跨层隐蔽（雷达渐偏）</option>
+      <option value="A4">A4 · 双因素仿冒</option>
+      <option value="A5">A5 · 5G-A 信令风暴</option>
+      <option value="A6">A6 · 切片/QoS 抢占</option>
+      <option value="A7">A7 · UPF/N6 流量劫持</option>
+      <option value="A8">A8 · NEF/订阅篡改</option>
+      <option value="A9">A9 · 平台越权/云控注入</option>
+      <option value="A10">A10 · 跨层隐蔽组合</option>
+    </select>
+    <label class="inject-field">强度
+      <input id="attackAmplitude" type="range" min="0.1" max="1" step="0.1" value="0.8"/>
+      <b id="amplitudeOut">0.80</b>
+    </label>
+    <label class="inject-field">时长
+      <input id="attackDuration" type="number" min="1" max="60" step="1" value="10" style="width:58px"/> s
+    </label>
+    <button id="btnInject" class="primary">注入</button>
+  </div>
   <span id="attackHint" class="inject-hint muted small">感知数据篡改→通信拥塞</span>
-  <label class="inject-field">强度
-    <input id="attackAmplitude" type="range" min="0.1" max="1" step="0.1" value="0.8"/>
-    <b id="amplitudeOut">0.80</b>
-  </label>
-  <label class="inject-field">时长
-    <input id="attackDuration" type="number" min="1" max="60" step="1" value="10" style="width:58px"/> s
-  </label>
-  <button id="btnInject" class="primary">注入</button>
 </div>
 
 <main class="trace-layout">
