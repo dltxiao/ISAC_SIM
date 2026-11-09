@@ -120,4 +120,8 @@ def test_a10_covert_combination():
     assert {"radar", "perception", "core", "app", "control"} <= set(ev["domains"])
     assert any(r.stream == "app.audit" for r in sink.records)
     assert "audit_gap" in det.snapshot()["by_rule"]
-    assert "nas_registration_flood" in det.snapshot()["by_rule"]
+    # A10 的“轻度信令”是 25/s，故意低于洪泛阈值：检测器不应把它判成信令风暴
+    # （旧实现靠 bot=true 标记才报 nas_registration_flood，那是生成器自报，已废弃）
+    assert "nas_registration_flood" not in det.snapshot()["by_rule"]
+    assert any(r.stream == "core.nas" and r.payload.get("msg_type") == "registration_request"
+               for r in sink.records)

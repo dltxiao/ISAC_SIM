@@ -237,7 +237,8 @@ PROFILE_CASES = [
     ("A2", ("S0", "S1", "S2"), ("ghost.added", "control.command")),
     ("A3", ("S0", "S1", "S2"), ("radar.echo", "radar.track")),
     ("A4", ("S0", "S1", "S2"), ("v2x.cam.clone",)),
-    ("A6", ("S0", "S1", "S2"), ("v2x.cpm.forged",)),
+    # A6 不再注入“伪造/丢包”标记，改为真实 QoS 降级导致的 CPM 接收降级
+    ("A6", ("S0", "S1", "S2"), ("v2x.cpm.degraded",)),
     ("A7", ("S0", "S1", "S2"), ("v2x.cpm.forged", "app.ingest")),
     ("A8", ("S0", "S1", "S2"), ("core.nef", "app.subscription")),
     ("A9", ("S0", "S1", "S2"), ("app.auth", "app.control")),
