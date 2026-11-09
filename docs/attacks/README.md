@@ -25,15 +25,15 @@
 | 编号 | 核心注入点 | 直接后果 | TraceProfile |
 |---|---|---|---|
 | A1 | `sensing.objects` 追加幽灵；`v2x_extra_load`；伪造 DENM | ADAS 可能制动；CBR/PER 上升 | S1–S5 |
-| A2 | `sensing.objects` 追加停止牌；`control.inject_brake`；`link_jam` | 直接制动；链路质量下降 | S0–S5 |
-| A3 | `sensing.radar.echo` 距离渐偏；60% 处小幅制动 | 点迹偏移；轻微减速 | S0–S5 |
+| A2 | `sensing.objects` 追加停止牌（受害车服务 RSU）；`control.inject_brake`；`link_jam` | ADAS 误判制动 + 伪指令；链路质量下降 | S0–S5 |
+| A3 | `sensing.radar.echo` 距离+方位渐变（拉近前车）；`control.inject_brake`；压低 SNR | 目标列表位置偏移 → ADAS 误刹；伪指令；少量减速 | S0–S5 |
 | A4 | 克隆 `auth.cert`/`auth.fingerprint`；伪标识 CAM | 位置跳变/指纹矛盾 | S0–S4 |
-| A5 | AMF 过载、bot 注册、PDU 会话失败、平台延迟、云控 | 核心网过载；远控延迟 | S0–S5 |
-| A6 | SMF 5QI 79→9；平台 ingest 延迟；伪造 CPM；制动 | QoS 降级；平台延迟 | S0–S5 |
-| A7 | UPF 路由改到 `dn:EVIL-01`；伪造 CPM；制动 | 路由漂移；溯源不符 | S0–S4 |
-| A8 | NEF/平台退订 DENM/SPaT；平台延迟；制动 | 平台漏事件 | S0–S5 |
-| A9 | 复用合法租户 token；批量云控制动 | 多车同时减速 | S0–S5 |
-| A10 | 雷达渐偏 + 轻度信令 + 审计抑制 + 小制动 | 隐蔽组合；审计缺口 | S0–S5 |
+| A5 | 合成 UE 注册洪泛（走 AMF 队列）、受害车摘网重注册、平台延迟、云控 | 核心网过载；远控 | S0–S5 |
+| A6 | SMF 5QI 79→9、GFBR 1000→360；按 UE 的 CPM 接收降级；平台延迟；制动 | QoS 降级；CPM 接收变差 | S0–S5 |
+| A7 | UPF 路由改到 `dn:EVIL-01`（真实 ingest 的 provenance 一起改向）；1–5 Hz 伪造 CPM；制动 | 路由漂移；真实流量溯源不符 | S0–S4 |
+| A8 | 平台订阅按幅度摘掉 denm/spat/cpm；NEF 腿（无下游）；制动 | 平台成片漏事件 | S0–S5 |
+| A9 | 复用合法租户 token；2 Hz 批量云控制动（3–8 车） | 多车同时减速 | S0–S5 |
+| A10 | 雷达渐偏（只偏服务传感器）+ 轻度信令（5–25/s）+ 审计抑制 + 小制动 | 隐蔽组合；审计缺口 | S0–S5 |
 
 ## 外部检测视角速查
 
@@ -45,12 +45,12 @@
 | A2 | `jam>0` + `ttc=99` 的无依据制动（停止牌与地图不符是佐证） | 感知→目标列表；总览→PC5；右栏 `control.command` | `sensing.objects` / `link.metrics` / `control.command` | §8 |
 | A3 | 回波 `range` 与位置测量的残差单调上升 | 右栏 `radar.echo`/`radar.track`；车辆 state | `sensing.radar.echo` / `sensing.radar.track` + `scenario.json` | §8 |
 | A4 | 同一伪名位置跳变 / CAM–GNSS 不符 + 指纹与 victim 一致 | 右栏 `record.clone`/`v2x.cam.clone`；Detector alerts | `auth.cert` / `auth.fingerprint` / `v2x.cam` / `sensing.gnss` | §8 |
-| A5 | 注册速率≈500/s + `app.ingest` 202 ms + 单车辆云控 | 核心网 AMF 节点；平台概览；右栏 `core.nas`/`app.ingest` | `core.nas` / `core.session` / `app.ingest` / `control.command` | §8 |
-| A6 | 5QI 79→9、GFBR 1000→100 + `app.ingest` 82 ms | 右栏 `core.qos`；核心网会话表；平台概览 | `core.qos` / `v2x.cpm` / `app.ingest` | §8 |
-| A7 | `route=dn:EVIL-01` + `provenance` 不符 | 核心网 UPF/DN 节点、流表；右栏 `app.ingest` | `core.upf` / `app.ingest` / `v2x.cpm` | §8 |
-| A8 | NEF 退订 + 平台订阅 revoke + `app.ingest` dropped | 核心网 NEF 节点；平台订阅；右栏 `app.ingest` | `core.nef` / `app.subscription` / `app.ingest` | §8 |
-| A9 | 合法 token 批量云控（≥3 车、高频）+ `ttc=99` | 平台 Token；右栏 `app.control`/`app.audit`/`control.command` | `app.auth` / `app.control` / `app.audit` / `control.command` | §8 |
-| A10 | 雷达弱偏 + 25/s 轻度信令 + `audit_seq` 缺口 + 小制动 | 核心网 AMF；平台概览；右栏 `app.audit`/`control.command` | `sensing.radar.*` / `core.nas` / `app.audit` / `control.command` | §8 |
+| A5 | 注册速率≈1400/s（AMF 容量 800/s）+ `app.ingest` 168 ms + 单车辆云控 | 核心网 AMF 节点；平台概览；右栏 `core.nas`/`app.ingest` | `core.nas` / `core.session` / `app.ingest` / `control.command` | §8 |
+| A6 | 5QI 79→9、GFBR 1000→360、受害车 CPM 丢包≈0.62 + `app.ingest` 168 ms | 右栏 `core.qos`/`v2x.cpm.degraded`；核心网会话表；平台概览 | `core.qos` / `v2x.cpm.rx` / `app.ingest` | §8 |
+| A7 | `route=dn:EVIL-01` + 全部 ingest 的 `provenance` 变 EVIL（约 30 条/s） | 核心网 UPF/DN 节点、流表；右栏 `app.ingest` | `core.upf` / `app.ingest` / `v2x.cpm` | §8 |
+| A8 | 平台订阅被摘事件类型 + `app.ingest` 成片 dropped（`ingest_drop_spike`） | 平台订阅；右栏 `app.ingest`；`core.nef` 只作背景 | `core.nef` / `app.subscription` / `app.ingest` | §8 |
+| A9 | 合法 token 批量云控（2 s 内 ≥2 批、每批 ≥3 车）+ `ttc=99` | 平台 Token；右栏 `app.control`/`app.audit`/`control.command` | `app.auth` / `app.control` / `app.audit` / `control.command` | §8 |
+| A10 | 雷达弱偏（默认 5.4 m）+ 5–25/s 轻度信令 + `audit_seq` 缺口 + 小制动 | 核心网 AMF；平台概览；右栏 `app.audit`/`control.command` | `sensing.radar.*` / `core.nas` / `app.audit` / `control.command` | §8 |
 
 > 注意：`/trace` 是内存投影（含 `ghost.added`、`vehicle.speed_drop`、`record.clone` 等派生事件），`out/` 是原始记录；两边字段粒度不对等，逐项对照见各篇对应小节。
 > `/trace` 新增 **V2X** 标签，内含 `CPM · broadcast summary` 卡：一行一个 sender（RSU/攻击者）的**最新一条** CPM，显示 `object_count/carried/ghost_in_cpm/truncated/attack/flags/delay_ms`；`objects[]` 只保留前 12 条，逐条报文仍在 `out/v2x.cpm.jsonl`。

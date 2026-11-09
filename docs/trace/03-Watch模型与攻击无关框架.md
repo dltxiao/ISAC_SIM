@@ -273,7 +273,7 @@ A5 保持原有 S0–S5；A6–A10 的阶段与暂停边界：
 | A9 | S0 启动 → S1 Token 复用 → S2 批量云控 → S3 控制到车 → S4 多车减速 → S5 告警 → END | scheduler/platform/tick |
 | A10 | S0 启动 → S1 雷达渐偏 → S2 轻度信令 → S3 审计抑制 → S4 小幅制动 → S5 告警 → END | scheduler/core/platform/tick |
 
-A6/A7/A8/A9/A10 的关键证据来自 `core.*`、`app.*`（含新增的 `v2x.cpm.forged`）；全局 target 仍由 provider 注册，profile 不拥有全局 target。
+A6/A7/A8/A9/A10 的关键证据来自 `core.*`、`app.*`（A6 的 CPM 降级走 `v2x.cpm.degraded`，A7 的伪造 CPM 走 `v2x.cpm.forged`）；全局 target 仍由 provider 注册，profile 不拥有全局 target。
 
 ### 5.6 新增一个攻击的接入步骤（当前方式）
 
@@ -308,7 +308,8 @@ A6/A7/A8/A9/A10 的关键证据来自 `core.*`、`app.*`（含新增的 `v2x.cpm
 ### 7.2 派生字段
 
 - `ghost` = `entity.startswith("ghost:")`；
-- `affected` 当前仍由 `control.command` + flags 推导，存在“普通 ADAS 也置位、攻击结束后粘滞”的已知问题；
+- `affected` = 当前仍受影响：有攻击 `flags`，或在**有攻击在跑**时最近 5 s 内收到过 `control.command`；
+  攻击结束后即归零。累计口径单独放在车辆状态卡片的 `affected_ever`，不再驱动 fleet 计数；
 - `delta` 由 store 计算，不由前端算；
 - 派生字段必须在 metadata 里标 `derived`，避免误解为原始字段。
 

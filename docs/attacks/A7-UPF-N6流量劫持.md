@@ -18,19 +18,17 @@ A7 做三件事：
 
 ```text
 POST /api/attacks {type:"A7", amplitude, duration, start}
-  → CampaignA7.start(ctx)                 campaigns.py:454
-      ├─ 需要 core + platform
-      ├─ pick_vehicle(seed,"a7")
+  → CampaignA7.start(ctx)
+      ├─ ready()：等 core/platform/有车
+      ├─ target 优先，否则 pick_vehicle(seed,"a7")
       └─ core.upf.set_route("dn:EVIL-01")
-  → CampaignA7.tick(ctx)                  campaigns.py:466
-      ├─ 第一次 tick：_inject(ctx)
-      └─ 每 0.5 s：_inject(ctx)
-  → _inject(ctx)                          campaigns.py:476
-      ├─ emit v2x.cpm(forged=true)
-      ├─ platform.ingest.ingest(provenance="dn:EVIL-01")
-      └─ control.inject_brake(4.0, 1.0)
-  → stop(ctx)                             campaigns.py:495
-      └─ core.upf.restore_route("dn:DN-01")
+  → CampaignA7.tick(ctx)：Pacer 按 inject_rate（1–5 Hz）发
+  → _inject(ctx)
+      ├─ emit v2x.cpm(forged=true, object_count=1..4)
+      ├─ platform.ingest.ingest(provenance=upf.route_override)
+      └─ control.inject_brake(2.0+3.0a, 1.0)
+  → 同一时间：platform.tick() 的**真实** CPM/SPaT ingest 也带 EVIL provenance
+  → stop(ctx)：core.upf.restore_route("dn:DN-01")，provenance 自动回到 DN-01
 ```
 
 层序：
@@ -44,21 +42,24 @@ A7 的 `_inject` 在 scheduler 执行，所以它写出的 `platform.ingest` 发
 ## 3. 选目标与参数
 
 ```python
-veh = pick_vehicle(ctx, self.seed, "a7")
+self.veh_id = spec.target if 合法 else pick_vehicle(ctx, self.seed, "a7").vid
+amp = clamp(spec.amplitude)
+self.inject_rate = 1.0 + 4.0 * amp        # 1..5 Hz
+self.brake_decel = 2.0 + 3.0 * amp        # 2..5 m/s²
+self.object_count = 1 + round(3.0 * amp)  # 1..4 个伪造目标
 core.upf.set_route(ctx, "dn:EVIL-01")
 ```
 
-- victim 与 router 无关，只用于制动；
-- `amplitude` 不影响路由、CPM 或制动；A7 的参数维度基本固定；
-- `spec.target` 不生效；
-- 没有检查 victim 是否在 core 里有会话。
+- victim 只用于制动，可以不在 core 里有会话；`spec.target` 命中就用；
+- 强度由 `inject_rate`（伪造 CPM 频率）、`object_count`、`brake_decel` 三个维度承载；
+- 包络：`inject_rate >= 3 Hz 且 route_hold >= 1 s`（旧的 `"route redirect"` 恒真）。
 
-| 量 | 值 |
-|---|---:|
-| 路由 | `dn:DN-01` → `dn:EVIL-01` |
-| 注入周期 | 0.5 s |
-| 制动 | 4.0 m/s²，1.0 s |
-| 伪造 CPM 来源 | `dn:EVIL-01` |
+| `a` | `inject_rate` | 3 s 注入条数 | `brake_decel` | `object_count` |
+|---:|---:|---:|---:|---:|
+| 0.2 | 1.8 Hz | ≈5 | 2.6 | 2 |
+| 0.5 | 3.0 Hz | ≈9 | 3.5 | 3 |
+| 0.8 | 4.2 Hz | ≈13 | 4.4 | 3 |
+| 1.0 | 5.0 Hz | ≈15 | 5.0 | 4 |
 
 ## 4. 注入点
 
@@ -80,29 +81,31 @@ ctx.emit("core.upf", self.entity, self.entity, {
 
 - 改的是所有已安装 flow 的 `route` 字段；
 - `core:flows` 表会显示 EVIL；
-- 没有真实流量转发，也没有 N6 抓包。
+- **平台 ingest 的 provenance 由这条路由派生**（`PlatformLayer.tick()`）：
+  攻击窗口内**真实** CPM/SPaT/DENM 的 `app.ingest` 也会带 `dn:EVIL-01`，
+  不再只有伪造记录才带异常来源；
+- 仍然没有真实抓包/转发包；`provenance` 是“路径指纹”，不是 pcap。
 
 ### 4.2 伪造 CPM 进平台
 
 ```python
-cpm = {
-    "msg_type": "cpm", "sender": "ATK-A7", "object_count": 1,
-    "objects": [{"object_id": 7001, "cls": "obstacle",
-                 "x": 200.0, "y": 0.0}],
-    "forged": True,
-}
+objects = [{"object_id": 7001 + i, "cls": "obstacle", "x": 200 + 6i, "y": 1.5i}
+           for i in range(object_count)]
+cpm = {"msg_type": "cpm", "sender": "ATK-A7",
+       "object_count": len(objects), "objects": objects, "forged": True}
 ctx.emit("v2x.cpm", "ATK-A7", "attacker:A7", cpm)
 platform.ingest.ingest(
     ctx, {"stream": "v2x.cpm", "payload": cpm},
-    token_id=platform.service_token_id or "svc-rsu",
-    tenant=platform.tenant, provenance="dn:EVIL-01",
+    token_id=platform.service_token_id or "",
+    tenant=platform.tenant, provenance=upf.route_override or "dn:DN-01",
 )
 ```
 
 - `ctx.emit` 让 `v2x.cpm` 记录和检测器看到它；
-- `platform.ingest.ingest` 直接写 `app.ingest`，`provenance=dn:EVIL-01`；
+- `object_count == len(objects)`，幅度越大伪造目标越多（1–4）；
 - 这条 CPM 不在 `v2x_outbox` 里，所以平台不会把它当普通 V2X 消息再处理一遍；
-- `source=ATK-A7`，`schema_ok=true`，`result=accept`，因此不能靠 schema 拒绝它。
+- `source=ATK-A7`、`schema_ok=true`、`result=accept`，不能靠 schema 拒绝；
+- 平台 ingest **不校验 token**，`token_id` 只是记录字段（见 §10.7）。
 
 ### 4.3 云控制动
 
@@ -110,16 +113,17 @@ platform.ingest.ingest(
 control.inject_brake(ctx, self.veh_id, decel=4.0, duration=1.0)
 ```
 
-`reason=injected`、`ttc=99`、`src=attacker:ctl-*`；每 0.5 s 重复一次，所以一个 3 s 攻击会产生多条 `control.command`（seed=14 实测 7 条）。
+`reason=injected`、`ttc=99`、`src=attacker:ctl-*`；按 `inject_rate` 重复，
+a=0.8 的 3 s 攻击实测 13 条 `control.command`（旧实现固定 0.5 s，且首拍双发 → 7 条）。
 
 ## 5. 下游消费
 
 | 消费者 | 看到什么 |
 |---|---|
 | CoreProvider | `core:upf.route_override=dn:EVIL-01`、flow route |
-| Platform | `app.ingest.provenance=dn:EVIL-01`、`schema_ok=true` |
-| Control | 周期性 `control.command`（ttc=99） |
-| Detector | `upf_route_drift`、`ingest_provenance_mismatch`、`brake_without_hazard` |
+| Platform | 攻击窗口内**所有** ingest 的 `provenance=dn:EVIL-01`（真实 CPM/SPaT + 伪造 CPM） |
+| Control | 按 `inject_rate` 重复的 `control.command`（ttc=99） |
+| Detector | `upf_route_drift`、`ingest_provenance_mismatch`（持续命中真实流量）、`brake_without_hazard` |
 | Trace | `core.upf`、`v2x.cpm.forged`、`app.ingest`、`control.command` |
 
 ## 6. 真值
@@ -131,8 +135,11 @@ control.inject_brake(ctx, self.veh_id, decel=4.0, duration=1.0)
   "nodes": ["upf:UPF-01", "platform:V2X-01",
             "veh:eastbound.1", "attacker:A7"],
   "domains": ["core", "app", "v2x", "control"],
-  "params": {"route": "dn:EVIL-01", "victim": "eastbound.1"},
-  "envelope": {"in_envelope": true, "criterion": "route redirect"},
+  "params": {"route": "dn:EVIL-01", "victim": "eastbound.1",
+             "inject_rate": 4.2, "injected": 13, "actual_rate": 4.33,
+             "brake_decel": 4.4, "object_count": 3,
+             "target_matched": false, "route_restored": true},
+  "envelope": {"in_envelope": true, "criterion": "inject_rate >= 3Hz and route_hold >= 1s"},
   "stages": [
     {"name": "UPF 路由改向", "t0": 2.0, "t1": 3.0},
     {"name": "伪造 CPM 注入平台", "t0": 3.0, "t1": 5.0}
@@ -162,6 +169,9 @@ upf_route_drift ×1, ingest_provenance_mismatch ×3,
 brake_without_hazard ×3
 ```
 
+其中 `ingest_provenance_mismatch` 现在由**真实流量**持续触发（3 s 内约 90 条
+真实 `app.ingest` 带 EVIL），不再只来自 13 条伪造 CPM。
+
 ## 8. 外部检测视角：数据支撑、`/trace` 位置与 `out/` 落点
 
 > 本节假设判定在仿真之外完成：只看导出的观测流与日志，不读 `truth/`、不读 `ctx.extras`。可观测面清单与路径/落盘规则见 [A1 §9.1、§9.4](A1-感知篡改诱导通信拥塞.md)。
@@ -173,7 +183,7 @@ A7 的核心是“N6 路径被改向 + 伪造 CPM 从异常来源进平台 + 周
 | 观测面 | 需要捕获的字段 | 在判定中的作用 | 可依赖度 |
 |---|---|---|---|
 | `core.upf` | `msg_type`、`route`、`flows`、`result` | `route_change` 把路由改成 `dn:EVIL-01`；恢复时回 `dn:DN-01` | 协议证据（关键） |
-| `app.ingest` | `provenance`、`source`、`msg_type`、`schema_ok`、`result`、`latency_ms` | 同一批 CPM 的 `provenance=dn:EVIL-01`、`schema_ok=true`、`result=accept` | 协议证据（关键） |
+| `app.ingest` | `provenance`、`source`、`msg_type`、`schema_ok`、`result`、`latency_ms` | 攻击窗口内**全部** ingest 的 `provenance=dn:EVIL-01`（约 30 条/s），恢复后回 DN-01 | 协议证据（关键） |
 | `v2x.cpm` | `sender`、`forged`、`objects[]` | 空口上也有同一条 CPM（`sender=ATK-A7`），说明平台入口与空口来源不一致 | `forged` 是标记；来源不一致是物理证据 |
 | `control.command` | `src`、`reason`、`params.ttc_s`、`params.decel_mps2` | 每 0.5 s 一条 `ttc=99`、`decel=4.0` 的制动 | 物理/协议证据 |
 | `link.metrics` | `cbr`、`jam` | 不变 → 排除 A1/A2 | 反证 |
@@ -183,16 +193,17 @@ A7 的核心是“N6 路径被改向 + 伪造 CPM 从异常来源进平台 + 周
 
 ```text
 Q1 core.upf 出现 route_change 且 route != dn:DN-01 → N6 路由漂移。
-Q2 app.ingest 的 provenance 不在白名单（dn:DN-01）→ 来源不可信。
-Q3 同一 CPM 在 v2x.cpm 与 app.ingest 都能找到，但平台侧 provenance 是 EVIL →
-   消息不是从正常 N6 路径进来的。
-Q4 control.command 的 ttc_s>=10、每 0.5 s 重复。
-=> Q1 判“路由劫持”；Q1∧Q2 判 A7；Q3 定位注入路径；Q4 说明后果。
+Q2 app.ingest 的 provenance 不在白名单（dn:DN-01），且是**连续多流**（cpm+spat）→ 路径被改写。
+Q3 同一 CPM 在 v2x.cpm 与 app.ingest 都能找到，且窗口内所有消息都改了来源 →
+   不是单条伪造，而是整条路径（伪造 CPM 只是其中一条）。
+Q4 control.command 的 ttc_s>=10、频率与 Q2 同窗口。
+=> Q1 判“路由劫持”；Q1∧Q2 判 A7；Q3 区分“单条伪造”与“路径改写”；Q4 说明后果。
 ```
 
 边界：
 
 - 没有真实 N6 抓包/转发：`provenance` 是平台侧“来源标签”，真实系统对应的是隧道/源地址；
+  但**同窗口内所有真实消息都换了来源**，这一点已经能支撑“路径被改写”，不是单条伪造；
 - 伪 CPM 结构合法（`schema_ok=true`、`result=accept`），不能靠 schema 拒绝；
 - 伪 CPM 是直接 `emit` + 直接 `ingest`，**不在** `v2x_outbox` 里，平台不会把它当普通 V2X 消息再处理一遍；
 - `restore_route` 在 `stop()` 里执行，`out/` 末尾会多一条 `route_change` 回 `dn:DN-01`，别当成第二次攻击；
@@ -237,20 +248,23 @@ jq -c 'select(.payload.sender=="ATK-A7") | .payload.objects' v2x.cpm.jsonl | hea
 
 | 相对 `t0` | 事件 |
 |---:|---|
-| 0 | 路由改为 EVIL，`core.upf` 事件 |
-| +0.05 | 第一次 `_inject`：伪 CPM + 平台 ingest + 制动 |
+| 0 | 路由改为 EVIL，`core.upf` 事件；平台后续 ingest 的 provenance 变 EVIL |
+| +0.05 | 第一次 `_inject`：伪 CPM + 平台 ingest + 制动（首拍只有一条） |
 | +0.05 | `app.ingest` provenance 不符；`brake_without_hazard` |
-| +0.5 | 第二轮 `_inject` |
-| `t1` | `restore_route` 回 `dn:DN-01` |
+| 每 `1/inject_rate` s | 下一轮 `_inject`（a=0.8 → 0.238 s） |
+| `t1` | `restore_route` 回 `dn:DN-01`，provenance 自动恢复 |
 
 ## 10. 边界与差异
 
-1. **不是真实 N6 劫持**：只改 flow 的 `route` 字段，没有抓包/转发。
+1. **不是真实 N6 劫持**：只改 flow 的 `route` 字段，没有抓包/转发；但平台侧
+   provenance 确实随路由变化，真实流量会“从 EVIL 进来”。
 2. **伪 CPM 是直接注入**：不在 `v2x_outbox`，平台不会按普通 CPM 处理。
 3. **`schema_ok=true`**：伪 CPM 结构合法，不能靠 schema 拒绝。
-4. **制动每 0.5 s 重复**：不是一次；短场景就会产生多条 `control.command`。
-5. **`amplitude` 无效**：A7 的强度维度固定。
-6. **`stop()` 会恢复路由**；如果 cancel，不会执行 stop，路由可能停在 EVIL。
+4. **制动按注入频率重复**：不是一次；a=0.8 的 3 s 攻击约 13 条 `control.command`。
+5. **`amplitude` 现在有效**：注入频率 1–5 Hz、目标数 1–4、制动 2–5 m/s²。
+6. **`stop()` 会恢复路由**；取消也会走 `stop(ctx)`（R2 已修），实测取消后
+   `route_override` 回到 `dn:DN-01`。
+7. **平台 ingest 不校验 token**：`token_id` 只是记录字段，A7 的伪 ingest 也照样 accept。
 
 ## 11. 复现与检查
 
@@ -265,34 +279,38 @@ jq -c 'select(.payload.sender=="ATK-A7") | .payload.objects' v2x.cpm.jsonl | hea
 | `core.upf.jsonl` | `route_change`、`route=dn:EVIL-01` |
 | `v2x.cpm.jsonl` | `forged=true`、`sender=ATK-A7` |
 | `app.ingest.jsonl` | `provenance=dn:EVIL-01`、`schema_ok=true` |
-| `control.command.jsonl` | 多条 `reason=injected`、`decel=4.0` |
-| `truth/events.jsonl` | `params.route/victim` |
+| `control.command.jsonl` | 多条 `reason=injected`、`decel=4.4` |
+| `truth/events.jsonl` | `params.inject_rate/injected/actual_rate/route_restored` |
 | `alerts.jsonl` | `upf_route_drift`、`ingest_provenance_mismatch` |
 
 ## 12. 代码索引
 
 | 作用 | 位置 |
 |---|---|
-| A7 类与 `start/tick/_inject/stop/truth` | `isacsim/attacks/campaigns.py:442`, `:454`, `:466`, `:476`, `:495`, `:501` |
-| `UPF.set_route` | `isacsim/layers/core/upf.py:20` |
-| 平台 ingest | `isacsim/layers/platform/ingest.py:42` |
-| `upf_route_drift` | `isacsim/detect/reference.py:207` |
-| `ingest_provenance_mismatch` | `isacsim/detect/reference.py:218` |
-| A7 真值链 | `isacsim/truth/model.py:36` |
-| A7 profile | `isacsim/trace/profiles.py:305` |
+| A7 类与 `ready/start/tick/_inject/stop/truth` | [campaigns.py](../../isacsim/attacks/campaigns.py) `class CampaignA7` |
+| `UPF.set_route` | [upf.py](../../isacsim/layers/core/upf.py) |
+| 平台 ingest（provenance 由路由派生） | [platform/layer.py](../../isacsim/layers/platform/layer.py) `tick` |
+| `upf_route_drift` | [reference.py](../../isacsim/detect/reference.py) `_on_core_upf` |
+| `ingest_provenance_mismatch` | [reference.py](../../isacsim/detect/reference.py) `_on_app_ingest` |
+| A7 profile | [profiles.py](../../isacsim/trace/profiles.py) `A7_PROFILE` |
+| 回归测试 | [tests/test_a78.py](../../tests/test_a78.py) |
 
 ## 13. 小结
 
 ```text
 UPF.route_override=dn:EVIL-01
         │
-每 0.5 s：
-  v2x.cpm(forged) + platform.ingest(provenance=EVIL)
-  control.inject_brake(4.0)
+        ├─ 平台 ingest 的 provenance 全部变 EVIL（真实 CPM/SPaT，约 30 条/s）
+        │        └─ ingest_provenance_mismatch（持续，覆盖真实流量）
         │
+每 1/inject_rate s：
+  v2x.cpm(forged, object_count=1..4) + platform.ingest + inject_brake(2.0+3a)
         ├─ upf_route_drift
-        ├─ ingest_provenance_mismatch
         └─ brake_without_hazard
+
+stop() → restore_route → provenance 自动回 dn:DN-01
 ```
 
-A7 的“劫持”是语义层的路由漂移 + 直接伪造 CPM 进平台；它没有真实 N6 抓包/转发，也没有篡改平台 token。
+A7 的“劫持”是语义层的路由漂移，但它现在是**真因果**：路由一变，平台收到的真实消息
+全部换了来源；伪造 CPM 只是其中的内容篡改。仍然没有真实 N6 抓包/转发。
+

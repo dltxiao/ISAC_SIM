@@ -35,9 +35,12 @@ Trace 不是“再写一遍仿真”，而是从现有代码的少数稳定接�
 | `record.forged_denm` / `record.clone` | TraceService | A1 DENM、A4 克隆 | 是 |
 | `radar.echo` / `radar.track` | TraceService | A3/A10 受害者车雷达样本 | 是（按 tick 采样） |
 | `v2x.cam.clone` | TraceService | A4 伪标识 CAM | 是 |
-| `v2x.cpm.forged` | TraceService | A6/A7 伪造/降级 CPM | 是 |
+| `v2x.cpm.degraded` | TraceService | A6 按 UE 的 CPM 接收降级（`v2x.cpm.rx`） | 是（每 receiver 0.5 s 节流） |
+| `v2x.cpm.forged` | TraceService | A7 伪造 CPM | 是 |
 
-> `v2x.cpm` 本身**不产生事件**：10 Hz × 3 RSU 会挤掉攻击事件；它被投影成全局表 `v2x:cpm`（每个 sender 最新一条摘要），只有 `forged/degraded` 才额外产生 `v2x.cpm.forged` 事件。
+> `v2x.cpm` 本身**不产生事件**：10 Hz × 3 RSU 会挤掉攻击事件；它被投影成全局表 `v2x:cpm`（每个 sender 最新一条摘要），只有 `forged/degraded` 才额外产生事件。
+> A6 从“伪造一条 `lost=true` 的 CPM”改为**真实的按 UE 接收**（`v2x.cpm.rx`，见 [v2x.py](../../isacsim/layers/v2x.py) `_deliver_cpm`），
+> 因此 A6 的事件种类是 `v2x.cpm.degraded`，`v2x.cpm.forged` 只剩 A7。
 
 **规划中但未实现**：`session.start/end`、`attack.stage`、`hook.before/after/drop`、`watch.delta`、`trace.error`、`truth`。
 当前 StepFrame 的 `reason` 承担 stage 语义，没有独立 `attack.stage` 事件。
@@ -76,7 +79,7 @@ Trace 不是“再写一遍仿真”，而是从现有代码的少数稳定接�
 - `attack_id`：攻击生命周期事件有值；A4 克隆/CAM 通过 victim 归因；core/app 事件部分仍为空；
 - `target_id`：可空；
 - `data`：各 kind 自定义；core/app 事件带 `stream/source/entity/msg_type/result/cause/count`；
-- `data` 白名单扩展：`provenance/token_id/tenant/vehicle_ids/command/action/subscription_id/event_types/actor/5qi/old_5qi/route/bot/ue_id`，供 profile 判定，均为增量字段。
+- `data` 白名单扩展：`provenance/token_id/tenant/vehicle_ids/command/action/subscription_id/event_types/remaining/actor/5qi/old_5qi/route/bot/ue_id`，供 profile 判定，均为增量字段。
 
 **当前没有** `run_id`、`schema`、`t_wall_ns`、`namespace`、`refs`、`parent_seq` 字段。规划中的统一信封见 §3.1。
 
@@ -278,7 +281,7 @@ out/<run>/trace/
 | 缺口 | 影响 | 当前处理 |
 |---|---|---|
 | `AttackInstance.snapshot()` 没有计算后的 `rsu_id/victim/ghost_count/extra_load` | `atk:A1` 卡片信息不全 | TraceService 读实例字段补齐 |
-| `flags` 只标真值 victim | “受影响车辆”不完整 | 从 `control.command`/速度差派生；仍有粘滞 |
+| `flags` 只标真值 victim | “受影响车辆”不完整 | 从 `control.command`/速度差派生；已加 5 s 窗口 + “有攻击在跑”门控，攻击结束不再粘滞 |
 | `ctx.extras` 每 tick 重建 | A1 的 ADAS DENM/CAM 升频丢失 | trace 不依赖它；以记录/状态为准 |
 | Web run 没有 `alerts.jsonl` | 回放没有告警 | 未实现回放；在线由 detector 记录 |
 | 信道是全局 `net:pc5` | 不能做 per-RSU 信道 | 只做一个 PC5 target，不虚构 |

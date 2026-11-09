@@ -22,17 +22,17 @@ POST /api/attacks {type:"A5", amplitude, duration, start}
   → CampaignA5.start(ctx)                 campaigns.py:364
       ├─ 需要 core + platform
       ├─ pick_vehicle(seed,"a5")
-      ├─ core.amf.set_overload(True)      amf.py:24
-      ├─ extras["platform_ingest_delay_ms"]=200
-      └─ platform.submit_control(token, brake 2.0/1.0)
-  → 每 0.1 s CampaignA5.tick(ctx)         campaigns.py:387
-      ├─ 保持 platform_ingest_delay_ms=200
-      ├─ n = min(50, int(rate*0.1))
-      ├─ n 条 core.nas registration_request(result=reject, bot=true)
-      └─ 1 条 core.session pdu_session_establish_reject
-  → stop(ctx)                             campaigns.py:414
-      ├─ amf.set_overload(False)
-      └─ 清除 platform_ingest_delay_ms
+      ├─ 选一个已有 PDU 会话的受害车
+      ├─ extras["platform_ingest_delay_ms"] = 60..240
+      └─ platform.submit_control(token, brake 2.0/1.0)   # token 为空则下一拍重试
+  → 每 0.05 s CampaignA5.tick(ctx)
+      ├─ 保持 platform_ingest_delay_ms
+      ├─ n = Pacer.due(t) 条 core.amf.start_registration(imsi-…, retry=False)
+      │     └→ CoreBus → AMF.handle → accept()：超容量则 registration_reject(congestion)
+      └→ t0+25%：core.reattach(victim)，重注册在拥塞窗口内被拒
+  → stop(ctx)
+      ├─ 清合成 UE（AMF/UDM/SMF，含总线在途消息）
+      └─ 清除 platform_ingest_delay_ms（队列排空后受害车自动恢复入网）
 ```
 
 层序：
@@ -41,103 +41,102 @@ POST /api/attacks {type:"A5", amplitude, duration, start}
 scheduler → sensing → v2x → uu → core → auth → platform → control
 ```
 
-- `core.nas`/`core.session` 由 A5 在 scheduler 直接 emit，不经过 AMF/SMF 状态机；
+- 洪泛**走 AMF 的真实入口** `core.amf.start_registration()`：登记请求进 `CoreBus`，
+  由 AMF 的队列/容量决定接纳还是 `registration_reject(cause=congestion)`；
+- 受害车由 `core.reattach()` 摘网后重注册，被拒/恢复都由 AMF/SMF 状态机产生；
 - `platform_ingest_delay_ms` 在 scheduler 写入，同一 tick 的 platform ingest 读到；
-- `submit_control` 在 start 里调用，intent 由 `control.tick()` 在 platform 之后消费。
+- `submit_control` 在平台 token 就绪后提交（`start` 不行就下一 tick 重试），
+  intent 由 `control.tick()` 在 platform 之后消费。
 
 ## 3. 参数
 
 ```python
-self.bot_ues = 20 + int(round(180 * max(0.0, min(1.0, self.spec.amplitude))))
-self.rate = 200.0 + 1800.0 * max(0.0, min(1.0, self.spec.amplitude))
+self.capacity_tps = core.amf.capacity                    # 场景标定 800/s
+self.rate = self.capacity_tps * _level(amplitude, 0.8, 2.0)   # 到达速率
+self.bot_ues = 50 + int(round(150 * amplitude))          # 合成 UE 数
 ```
 
-| `a` | `bot_ues` | 标称 `rate` | 每 0.1 s 发射 `n` | 理论最大实际速率 |
-|---:|---:|---:|---:|---:|
-| 0.5 | 110 | 1100/s | 50 | 500/s |
-| 0.8 | 164 | 1640/s | 50 | 500/s |
-| 1.0 | 200 | 2000/s | 50 | 500/s |
+| `a` | 到达 `rate` | 与 AMF 容量之比 | 每 0.05 s 发送 |
+|---:|---:|---:|---:|
+| 0.1 | 736/s | 0.92× | 37 |
+| 0.5 | 1120/s | 1.40× | 56 |
+| 0.8 | 1408/s | 1.76× | 70 |
+| 1.0 | 1600/s | 2.00× | 80 |
 
-`n = max(1, min(50, int(self.rate * 0.1)))`。所以：
-
-- 真值里的 `rate` 是**标称强度**，不是实际 emit 速率；
-- 实际 `core.nas` 最多约 500 条/s；
-- 每次 `tick` 还会发 1 条 `core.session` 拒绝，约 10 条/s。
-
-seed=14、a=0.8、3 s 攻击实测 `core.nas` 约 1029 条，远低于 `1640×3` 的理论值。
+- 速率用 `Pacer` 累计补发，平均速率等于 `rate`（旧的 `t - last < 0.1` 门控会把
+  0.1 s 边界判负，实际只有标称的 1/4–1/6）；
+- `truth.params.rate` 是**到达速率**，`actual_rate` 是攻击窗口内实际发出的条数/时长；
+- 包络判据改成 `actual_rate >= AMF 容量`，即“至少真能打满 AMF”；
+- 实测 a=0.8、3 s：发送 4084 条，实际 ≈1361/s，AMF 接纳 ≈2586、拒绝 ≈1508。
 
 ## 4. 注入点
 
-### 4.1 AMF 过载
+### 4.1 AMF 过载（由真实排队推导）
 
 ```python
-core.amf.set_overload(ctx, True)
+for _ in range(n):
+    core.amf.start_registration(ctx, f"imsi-4600{seq % bot_ues:05d}", "GNB-01",
+                                retry=False)
 ```
 
-`AMF.set_overload()`（[amf.py](../../isacsim/layers/core/amf.py:24)）设置：
+`CoreBus` → `AMF.handle()` → `NetworkFunction.accept(ctx)`：
 
-- `overloaded=True`；
-- `load_hint=0.85`；
-- `queue_depth=queue_capacity×0.85`；
-- emit 一条 `core.nas`：`msg_type=amf_overload, result=enter`。
+- 队列按 `capacity·dt` 排空，接纳量超过容量就丢弃并回 `registration_reject`；
+- AMF 的 `shed_at=0.3`（SMF 是 0.8）：入口拥塞到 30% 就开始卸；
+- `queue_depth`、`latency_ms`、`overloaded` 全部由排队推出，
+  `amf_overload`（enter/clear）也由 AMF 自己发，攻击者不再 `set_overload(True)`；
+- 过载期间`queue_depth≈90/300`，`latency_ms≈113 ms`（`base + queue/capacity`）。
 
-这会让 CoreProvider 的 `core:amf` 健康状态变红/橙，也会让 trace 的 A5 S1 命中。
+### 4.2 合成 UE
 
-### 4.2 bot 注册
+- `ue_id` 形如 `imsi-460000042`，在 `bot_ues` 个 ID 间循环（身份多样性 50–200）；
+- 不带任何 `bot`/`forged` 标记：真攻击者不会打标，检测也不该依赖它；
+- `retry=False`：被拒后不重试，否则攻击结束后还会继续灌；
+- `stop()` 里 `core.purge_synthetic("imsi-")` + `schedule_purge(..., t+0.4)`
+  清掉 AMF/UDM/SMF 三处的合成 UE（含总线里的在途消息）。
+
+### 4.3 受害车重注册
 
 ```python
-ctx.emit("core.nas", f"ue:bot-{i % self.bot_ues:04d}", "amf:AMF-01", {
-    "msg_type": "registration_request",
-    "ue_id": f"bot-{i % self.bot_ues:04d}",
-    "gnb_id": "GNB-01",
-    "result": "reject",
-    "cause": "congestion",
-    "bot": True,
-    "latency_ms": 12.0,
-})
+self._detached = core.reattach(ctx, self.veh_id)   # 拥塞形成后（t0+25%）
 ```
 
-- 直接 emit，不调用 `amf.start_registration()`；
-- `bot=True` 是检测器识别洪泛的关键字段；
-- `result=reject`、`cause=congestion` 是攻击者填的，不是 AMF 实际拒绝；
-- `ue_id` 在 `bot_ues` 范围内循环，不是每个都唯一。
+`CoreLayer.reattach()`：`amf.release()` 摘网 → 下一 tick 的 attach 循环重新
+`start_registration()`。拥塞窗口内 AMF 直接拒绝，攻击结束后自动恢复：
 
-### 4.3 PDU 会话失败
-
-```python
-ctx.emit("core.session", f"ue:{self.veh_id}", "smf:SMF-01", {
-    "msg_type": "pdu_session_establish_reject",
-    "ue_id": self.veh_id,
-    "result": "reject",
-    "cause": "congestion",
-    "bot": True,
-    "latency_ms": 18.0,
-})
+```text
+t=2.80 deregistration accept      （受害车被摘网）
+t=2.85 registration_reject  cause=congestion  queue=89  lat=113ms
+t=3.35/3.90/4.45/5.00 同样被拒（每 0.5 s 重试一次）
+t=5.05 registration_accept         （洪泛结束，队列排空）
+t=5.10 pdu_session_establish_accept（会话恢复）
 ```
 
-同样直接 emit；它不会真的删除 SMF 里的 session，也不会改变 `core:sessions` 表。
+攻击者不再自己 emit 一条 `pdu_session_establish_reject`。
 
 ### 4.4 平台延迟与云控
 
 ```python
-ctx.extras["platform_ingest_delay_ms"] = 200.0
+ctx.extras["platform_ingest_delay_ms"] = _level(amplitude, 60.0, 240.0)
 ...
-platform.submit_control(ctx, token_id=token, vehicle_ids=[self.veh_id],
-    command="brake", params={"decel_mps2": 2.0, "duration_s": 1.0}, ttl_s=10.0)
+platform.submit_control(ctx, token_id=token, ...)   # token 为空就下一 tick 重试
 ```
 
-- 平台 ingest 的真实延迟变成 `2 + 200 = 202 ms`；
-- 云控走 `Dispatcher.submit()`（[dispatch.py](../../isacsim/layers/platform/dispatch.py:17)），会 emit `app.control` 和 `app.audit`；
-- 控制 intent 由 `ControlLayer` 消费，发出 `control.command`，`ttc=99`、`src=platform:V2X-01`。
+- 平台 ingest 的真实延迟变成 `2 + 60..240 ms`；
+- 云控走 `Dispatcher.submit()`，emit `app.control` 与 `app.audit`；
+- `start` 时 token 还没 bootstrap 就挂起到下一 tick（旧实现是静默跳过，
+  真值却仍声明 `control.command`，见审核 R1）；
+- 控制 intent 由 `ControlLayer` 消费，发出 `control.command`（`ttc=99`）。
+  注意“云控老化”仍未建模：延迟作用在 ingest，不在指令本身（§10.5）。
 
 ## 5. 下游消费
 
 | 消费者 | 看到什么 | 结果 |
 |---|---|---|
-| CoreProvider | AMF 过载、queue_depth、health | `core:amf` 变红/橙 |
-| Platform | ingest 延迟 202 ms | `app.ingest` 出现 `latency_ms>=50` |
+| CoreProvider | AMF 队列 89/300、latency 113 ms、overload enter/clear | `core:amf` 变红 |
+| Platform | ingest 延迟 62–242 ms | `app.ingest` 出现 `latency_ms>=50` |
 | Control | 云控 intent | 一条 `control.command`（ttc=99） |
-| Detector | bot 注册、ingest 延迟、无依据制动 | `nas_registration_flood`、`ingest_latency_spike`、`brake_without_hazard` |
+| Detector | 注册到达速率 + 拒绝占比、ingest 延迟、无依据制动 | `nas_registration_flood`、`ingest_latency_spike`、`brake_without_hazard` |
 | Trace | 100 ms 聚合的 `core.nas`、`core.session`、`app.*` | A5 S0–S5 |
 
 ## 6. 真值
@@ -149,8 +148,10 @@ platform.submit_control(ctx, token_id=token, vehicle_ids=[self.veh_id],
   "nodes": ["amf:AMF-01", "smf:SMF-01", "platform:V2X-01",
             "veh:westbound.0", "attacker:A5"],
   "domains": ["uu", "core", "app", "task", "control"],
-  "params": {"bot_ues": 164, "rate": 1640.0, "victim": "westbound.0"},
-  "envelope": {"in_envelope": true, "criterion": "rate >= 1000/s"},
+  "params": {"bot_ues": 170, "rate": 1408.0, "actual_rate": 1361.33,
+             "capacity_tps": 800.0, "victim": "southbound.0",
+             "victim_reattach": true, "target_matched": false},
+  "envelope": {"in_envelope": true, "criterion": "actual_rate >= AMF capacity (800/s)"},
   "stages": [
     {"name": "注册洪泛", "t0": 2.0, "t1": 3.0},
     {"name": "PDU 会话失败", "t0": 3.0, "t1": 5.0},
@@ -167,15 +168,17 @@ platform.submit_control(ctx, token_id=token, vehicle_ids=[self.veh_id],
 
 三个“不要误读”：
 
-1. `rate=1640` 是标称值，实际最多约 500 条/s；
-2. `stages` 的“远控指令老化”是一个零长度区间（duration=3 时 `t0+3=t1`），代码里没有“老化”逻辑；
-3. 真值说 `control.command:delay`，但实测 `control.command` 在 `t0` 就发出（`ttc=99`）；被延迟的是平台 ingest，不是这条控制指令。
+1. `rate` 是**到达速率**，`actual_rate` 是实测发射速率；两者差 3% 以内（旧的标称/实际
+   能差 5 倍，见审核 R11）；
+2. `stages` 的第三段仍只是叙述分界，不是运行期开关；
+3. 真值链里 `control.command:delay` 名不副实：`control.command` 在提交当拍就发出
+   （`ttc=99`），被延迟的是平台 ingest，不是这条指令；“老化”仍未实现。
 
 ## 7. 检测侧看到了什么
 
 | 规则 | 触发 |
 |---|---|
-| `nas_registration_flood` | 1 s 内 ≥10 条 `bot=true` 的 `registration_request` |
+| `nas_registration_flood` | 1 s 内 ≥300 条 `registration_request`，且拒绝占比 ≥10%（不看 `bot`） |
 | `ingest_latency_spike` | `app.ingest.latency_ms >= 50` |
 | `brake_without_hazard` | `control.command.params.ttc_s >= 10` |
 | 其他 | `core.session` 拒绝本身没有专用规则 |
@@ -199,7 +202,7 @@ A5 是“信令层 + 平台层 + 控制层”的组合：伪造注册打满 AMF�
 |---|---|---|---|
 | `core.nas` | `msg_type`、`ue_id`、`gnb_id`、`result`、`cause`、`bot`、`latency_ms` | 注册请求速率（本例约 500/s）、`result=reject`、`cause=congestion`；`amf_overload enter/clear` | `bot` 是仿真标记；速率/拒绝率是协议证据 |
 | `core.session` | `ue_id`、`msg_type`、`cause`、`result` | 受害车 `pdu_session_establish_reject` | 协议证据 |
-| `app.ingest` | `latency_ms`、`msg_type`、`source`、`result` | 平台 ingest 202 ms（全局），与信令风暴同窗口 | 物理证据 |
+| `app.ingest` | `latency_ms`、`msg_type`、`source`、`result` | 平台 ingest 62–242 ms（全局），与信令风暴同窗口 | 物理证据 |
 | `app.control` | `token_id`、`vehicle_ids`、`command`、`params`、`result` | 单车辆云控制动，来自合法 tenant token | 协议证据 |
 | `app.auth` / `app.audit` | `msg_type`、`token_id`、`actor`、`action` | token 校验通过、审计记录 `control:submit` | 协议证据 |
 | `control.command` | `src`、`reason`、`params.ttc_s` | `src=platform:V2X-01`、`reason=cloud_control`、`ttc=99` | 物理/协议证据 |
@@ -208,18 +211,19 @@ A5 是“信令层 + 平台层 + 控制层”的组合：伪造注册打满 AMF�
 判定口径：
 
 ```text
-N1 单位时间注册请求显著高于基线（本例 1 s ≥10 条、实际约 500/s），且 ue_id 高度重复/可预测。
-N2 同窗口 core.nas 拒绝率高（cause=congestion），core.session 出现建立拒绝。
-N3 app.ingest.latency_ms 持续 >=50（本例 202），与 N1 同窗口。
+N1 单位时间注册请求显著高于基线（本例 1 s ≥300 条，实测约 1400/s），
+   且 ue_id 的多样性/可预测性异常（本例 170 个 ID 循环，id 熵 ≈0.12）。
+N2 同窗口 core.nas 拒绝率高（cause=congestion，本例 ≈37%），AMF queue_depth 上升、latency 上升。
+N3 app.ingest.latency_ms 持续 >=50，与 N1 同窗口。
 N4 control.command 的 ttc_s>=10、src=platform:*，但前序没有对应的 CPM/DENM 危险事件。
 => N1∧N3 判 A5；N2 是佐证；N4 是后果与放大器，不是必要条件。
 ```
 
 边界：
 
-- `bot=true`、`ue_id=bot-*` 是仿真标记；真实系统看速率、身份熵、拒绝码分布；
-- 标称速率 1640/s 是 `rate` 参数，实际每 0.1 s 最多 50 条（≈500/s）；
-- A5 的 `core.session` 拒绝**不改变会话表**：`core:sessions` 仍显示正常会话，不能拿“会话数没变”否定；
+- 数据里没有 `bot`/`forged` 标记：检测只看速率、拒绝率、身份重复度；
+- `truth.params.rate` 是到达速率，`actual_rate` 是实测速率（两者相差 <5%）；
+- 受害车的注册拒绝是 AMF 真产生的，攻击结束后会自动恢复入网与会话；
 - 平台延迟是全局的（CPM/DENM/SPaT 全都慢），不是只慢受害车相关消息；
 - 云控指令在 `t0` 就发出，被延迟的是平台 ingest，不是这条指令。
 
@@ -242,9 +246,9 @@ N4 control.command 的 ttc_s>=10、src=platform:*，但前序没有对应的 CPM
 
 | 数据 | 文件 | 过滤键 / 字段 | 备注 |
 |---|---|---|---|
-| 注册洪泛 | `core.nas.jsonl` | `.payload.msg_type=="registration_request"`、`.payload.bot==true`、`.payload.result=="reject"` | 按 1 s 窗口计数 |
+| 注册洪泛 | `core.nas.jsonl` | `.payload.msg_type=="registration_request"` / `registration_reject`、`.payload.queue_depth` | 按 1 s 窗口计数与拒绝占比 |
 | AMF 过载 | `core.nas.jsonl` | `.payload.msg_type=="amf_overload"`（`enter`/`clear`） | 攻击起止两个点 |
-| 会话拒绝 | `core.session.jsonl` | `.payload.msg_type=="pdu_session_establish_reject"` | `ue_id` 是受害车 |
+| 会话拒绝 | `core.session.jsonl` | `.payload.msg_type=="pdu_session_establish_reject"` | SMF 容量先打满时出现；受害车自身是注册被拒（无会话） |
 | 平台延迟 | `app.ingest.jsonl` | `.payload.latency_ms>=50` | 本例 202 |
 | 云控 | `app.control.jsonl` | `.payload.command=="brake"`、`vehicle_ids` 含受害车 | token 是合法租户 token |
 | 鉴权/审计 | `app.auth.jsonl` / `app.audit.jsonl` | `token_validate accept` / `action=="control:submit"` | 与 A9 的区别在 vehicle_ids 规模 |
@@ -254,7 +258,7 @@ N4 control.command 的 ttc_s>=10、src=platform:*，但前序没有对应的 CPM
 
 ```bash
 cd out/doc_a5/arterial-14-*
-jq -c 'select(.payload.bot==true) | .payload.result' core.nas.jsonl | sort | uniq -c
+jq -c 'select(.payload.msg_type=="registration_reject") | .payload.cause' core.nas.jsonl | sort | uniq -c
 jq -c 'select(.payload.msg_type=="amf_overload") | {t:.ts_ns, r:.payload.result}' core.nas.jsonl
 jq -c 'select(.payload.msg_type=="pdu_session_establish_reject") | .payload.ue_id' core.session.jsonl | head
 jq -c 'select(.payload.latency_ms>=50) | {lat:.payload.latency_ms, src:.payload.source}' app.ingest.jsonl | head -3
@@ -266,20 +270,25 @@ jq -c 'select(.payload.latency_ms>=50) | {lat:.payload.latency_ms, src:.payload.
 
 | 相对 `t0` | 事件 |
 |---:|---|
-| 0 | AMF 过载；平台延迟 200 ms；提交云控 intent |
+| 0 | 开始灌注册（60–80 条/0.05 s）；平台延迟 60–240 ms；提交云控 intent |
 | 0 | `control.tick()` 发出 `control.command`（ttc=99） |
-| 0～ | 每 0.1 s 一批 bot `core.nas` + 1 条 `core.session` 拒绝 |
-| +0.1 | 第一条 `app.ingest` 延迟 >=200 ms |
-| +1.0 | 检测器满足 10 条/s 门槛，报 `nas_registration_flood` |
-| `t1` | `stop()` 清除 AMF 过载与平台延迟 |
+| +0.05 | AMF 队列上升、`latency_ms` 跟随 `queue/capacity` 上升 |
+| +0.15～0.3 | AMF 入口拥塞到 30% 开始卸：`registration_reject(congestion)`、`amf_overload enter` |
+| +0.5 | 检测器满足 ≥300 条/s 且拒绝占比 ≥10%，报 `nas_registration_flood` |
+| +0.25·duration | 受害车被 `reattach()` 摘网，重注册在拥塞窗口内被拒 |
+| `t1` | `stop()` 清合成 UE、平台延迟；队列排空、`amf_overload clear`；受害车随后自动恢复入网 |
 
 ## 10. 边界与差异
 
-1. **不是真实注册洪泛**：A5 直接 emit 记录，不创建 UE、不排队、不触发 AUSF 鉴权。
-2. **标称速率不等于实际速率**：每 0.1 s 最多 50 条，实际上限约 500/s。
-3. **`core.session` 拒绝不改变会话表**：`core:sessions` 仍显示正常会话。
-4. **平台延迟是全局的**：所有 ingest 都慢 200 ms，不是只慢受害车相关消息。
-5. **云控不“老化”**：`control.command` 在 `t0` 立即发出；`ttc=99` 是攻击者填的值。
+1. **注册走 AMF，但不是协议栈级洪泛**：不建 NAS 连接、不做完整性保护，只走
+   `start_registration → CoreBus → handle → accept` 的语义状态机。
+2. **容量是场景标定值**：AMF 800/s、SMF 600/s、队列 300（`docs/09 §4.4` 说明为什么
+   不用现网的 5000/s：单路口场景用不到，而且会把事件量放大到不可用）。
+3. **受害车会话是真的没了**：`reattach()` 摘网后 SMF 会话被移除，攻击结束后重新建立；
+   `core:sessions` 在攻击窗口内确实少一条（旧实现是“拒绝但不改会话表”）。
+4. **平台延迟是全局的**：所有 ingest 都慢，不是只慢受害车相关消息（`extras` 是单键）。
+5. **云控不“老化”**：`control.command` 在提交当拍立即发出；`ttc=99` 是攻击者填的值，
+   被延迟的是 ingest 而不是这条指令。
 6. **`domains` 含 `task`，但没有专门的 task 事件**；这是声明，不是保证。
 7. **Trace S0**：A5 的 S0 在 `after_scheduler`；如果在连续运行时已经启动攻击再冻结，会错过 S0；从 `/trace` 注入会自动先冻结。
 
@@ -293,38 +302,42 @@ jq -c 'select(.payload.latency_ms>=50) | {lat:.payload.latency_ms, src:.payload.
 
 | 文件 | 看什么 |
 |---|---|
-| `core.nas.jsonl` | `bot=true`、`result=reject`、`cause=congestion` |
+| `core.nas.jsonl` | `registration_reject`、`cause=congestion`、`queue_depth` 递减 |
 | `core.session.jsonl` | `pdu_session_establish_reject` |
-| `app.ingest.jsonl` | `latency_ms≈202` |
+| `app.ingest.jsonl` | `latency_ms` 62–242 之间 |
 | `app.control.jsonl` | `vehicle_ids=[victim]`、`params.decel_mps2=2.0` |
 | `control.command.jsonl` | `src=platform:V2X-01`、`ttc=99` |
-| `truth/events.jsonl` | `params.bot_ues/rate` |
+| `truth/events.jsonl` | `params.rate/actual_rate/capacity_tps/victim_reattach` |
 | `alerts.jsonl` | `nas_registration_flood`、`ingest_latency_spike` |
 
 ## 12. 代码索引
 
 | 作用 | 位置 |
 |---|---|
-| A5 类与 `start/tick/stop/truth` | `isacsim/attacks/campaigns.py:350`, `:364`, `:387`, `:414`, `:421` |
-| AMF 过载 | `isacsim/layers/core/amf.py:24` |
-| 平台云控 | `isacsim/layers/platform/dispatch.py:17` |
-| 平台 ingest 延迟 | `isacsim/layers/platform/ingest.py:42` |
-| `nas_registration_flood` | `isacsim/detect/reference.py:196` |
-| `ingest_latency_spike` | `isacsim/detect/reference.py:218` |
-| `brake_without_hazard` | `isacsim/detect/reference.py:190` |
-| A5 真值链 | `isacsim/truth/model.py:34` |
-| A5 profile | `isacsim/trace/profiles.py:261` |
+| A5 类与 `ready/start/tick/stop/truth` | [campaigns.py](../../isacsim/attacks/campaigns.py) `class CampaignA5` |
+| 注册入口（队列/容量） | [amf.py](../../isacsim/layers/core/amf.py) `start_registration/handle` |
+| NF 排队模型 | [nf.py](../../isacsim/layers/core/nf.py) `tick/accept/latency_ms` |
+| 受害车摘网/清理 | [layer.py](../../isacsim/layers/core/layer.py) `reattach/purge_synthetic` |
+| `nas_registration_flood` | [reference.py](../../isacsim/detect/reference.py) `_on_core_nas` |
+| `ingest_latency_spike` | [reference.py](../../isacsim/detect/reference.py) `_on_app_ingest` |
+| `brake_without_hazard` | [reference.py](../../isacsim/detect/reference.py) `_on_control` |
+| A5 profile | [profiles.py](../../isacsim/trace/profiles.py) `A5_PROFILE` |
+| 回归测试 | [tests/test_a456.py](../../tests/test_a456.py) |
 
 ## 13. 小结
 
 ```text
-AMF 过载 + 每 0.1 s 50 条 bot 注册 + 1 条会话拒绝
+start_registration ×N（合成 UE，60–80 条/0.05 s，无 bot 标记）
         │
-        ├─ nas_registration_flood
-        └─ ingest_latency_spike
+        ├─ AMF 队列 → accept() 丢包 → registration_reject(congestion)
+        │                             └─ amf_overload enter/clear
+        ├─ nas_registration_flood（速率 + 拒绝占比）
+        └─ ingest_latency_spike（平台 ingest 60–240 ms）
 
-platform.submit_control → control.command(ttc=99)
-        └─ brake_without_hazard
+core.reattach(victim) → 重注册 → 拥塞期被拒 → 攻击结束后自动恢复
+platform.submit_control → control.command(ttc=99) → brake_without_hazard
 ```
 
-A5 是“核心网/平台语义状态 + 信令记录”的组合攻击：它让 AMF 看起来过载、让平台 ingest 变慢、再叠加一条无依据云控制动。它不是 164 个真实 UE 的协议级洪泛。
+A5 现在是一条**真因果**链：攻击者只做“灌注册 + 摘网”，过载、拒绝、会话丢失、
+恢复全部由 AMF/SMF 的队列与状态机产生。它仍不是协议栈级（没有 NAS 完整性保护、
+没有真实 UE 上下文），但不再是“攻击者手写拒绝记录”。

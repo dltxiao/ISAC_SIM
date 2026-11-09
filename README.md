@@ -34,6 +34,7 @@ python3 -m venv .venv
 
 # 6. 批量生成并评估
 .venv/bin/python -m isacsim batch --out out/ds --attacks 300 --normal 300 --duration 15 --workers 16 --no-streams
+# 正常集默认注入 9 类合法运维动作；--no-ops 可关掉（旧口径）
 .venv/bin/python -m isacsim eval --runs out/ds
 
 # 7. 清理旧 Web 会话（默认只预览，--yes 才删除）
@@ -48,7 +49,7 @@ Web 控制台启动后，打开 **`http://127.0.0.1:8080/trace`**（或点主控
 - 不注入攻击时展示 3 RSU + gNB 目标列表、车队、PC5、检测器，以及 5G 核心网/平台节点状态；
 - 右侧事件栏包含 `core.nas`/`core.session`/`app.*`/`defense.action`，A5 的洪泛事件自动聚合；
 - 追踪页可按 A1–A10 的 profile 单步：A1 从 S1 开始，A2–A10 从 S0 开始，按攻击链停在 scheduler/core/platform/tick 边界；
-- A3/A10 的 `radar.echo/track`、A4 的 `v2x.cam.clone`、A6/A7 的 `v2x.cpm.forged` 已投影到事件栏；
+- A3/A10 的 `radar.echo/track`、A4 的 `v2x.cam.clone`、A6 的 `v2x.cpm.degraded`（按 UE 的 CPM 接收降级）、A7 的 `v2x.cpm.forged` 已投影到事件栏；
 - 核心网卡片包含 UE、PDU 会话（DNN/5QI）、UPF 流表（TEID/路由），平台卡片包含 token 与订阅；
 - 追踪页顶栏可直接“开始/冻结/继续/停止”，不需要先回主控制台；
 - 顶栏下方“攻击注入”条选择 A1–A10、强度、时长后点“注入”；运行中注入会自动冻结；
