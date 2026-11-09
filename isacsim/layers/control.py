@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 from dataclasses import dataclass
 
 from ..config import SceneCfg
@@ -49,6 +50,7 @@ class ControlLayer:
         self.sensing = sensing
         self.rng = rng_for(scene.seed, "control:adas")
         self.pending: list[PendingBrake] = []
+        self.recent_brakes: deque = deque(maxlen=64)   # 持久化：跨 tick 供 V2X 消费
         self.intents: list[dict] = []
         self.last_cmd_t: dict[str, float] = {}
         self._seq: dict[str, int] = {}
@@ -94,7 +96,7 @@ class ControlLayer:
             if veh is None:
                 continue
             self._command(
-                ctx, veh, ttc=99.0,
+                ctx, veh, ttc=float(it.get("ttc_s", 99.0)),
                 reason=str(it.get("reason", "cloud_control")),
                 source=str(it.get("source", "platform:V2X-01")),
                 decel=float(it.get("decel_mps2", 3.0)),
@@ -140,10 +142,14 @@ class ControlLayer:
         })
         self.pending.append(PendingBrake(due_t=t + self.REACTION_S, vid=veh.vid,
                                          decel=dec, duration=dur))
-        ctx.extras.setdefault("brake_events", []).append({
+        brake_ev = {
             "vid": veh.vid, "x": veh.x, "y": veh.y,
             "cause": "emergency_brake" if reason != "injected" else "injected_brake",
-        })
+            "t": round(t, 3),
+        }
+        ctx.extras.setdefault("brake_events", []).append(brake_ev)
+        # 持久副本：v2x.tick 在本 tick 的控制层之前运行，只能看到上一 tick 的制动
+        self.recent_brakes.append(brake_ev)
         ctx.extras["emergency_until"] = max(ctx.extras.get("emergency_until", 0.0), t + 3.0)
 
     def _apply_pending(self, ctx, t: float) -> None:

@@ -35,12 +35,15 @@ class CoreLayer:
             self.upf.entity: self.upf,
         }
         self._known: dict[str, str] = {}
+        self.deferred_purge: dict[str, float] = {}   # 前缀 → 清理截止时刻
         self._closed = False
 
     # ------------------------------------------------------------------
     def tick(self, ctx) -> None:
         if not self.cfg.enabled or self._closed:
             return
+        for nf in self.nfs.values():
+            nf.tick(ctx)                    # 排空服务能力、更新过载指示
         self.bus.dispatch(ctx.t, self.nfs, ctx)
         uu = ctx.extras.get("layers", {}).get("uu")
         attached = dict(getattr(uu, "attached", {}) or {})
@@ -57,7 +60,39 @@ class CoreLayer:
                 self.amf.release(ctx, ue_id)
                 self._known.pop(ue_id, None)
         self.bus.dispatch(ctx.t, self.nfs, ctx)
+        if self.deferred_purge:
+            # 等总线里的在途消息都落地，再清攻击注入的合成 UE/会话
+            for prefix, until in list(self.deferred_purge.items()):
+                self.purge_synthetic(ctx, prefix)
+                if ctx.t >= until:
+                    self.deferred_purge.pop(prefix, None)
         ctx.extras["core"] = self
+
+    # ------------------------------------------------------------------
+    def reattach(self, ctx, ue_id: str) -> bool:
+        """让 UE 重新走一遍注册流程（攻击者伪造注销后的重入）。
+
+        真实路径：AMF 释放 → 下一 tick 的 attach 循环重新 `start_registration`
+        → 拥塞时被 AMF 队列丢弃并返回 `registration_reject`。攻击者不伪造拒绝记录。
+        """
+        if ue_id not in self._known:
+            return False
+        self.amf.release(ctx, ue_id)
+        self._known.pop(ue_id, None)
+        self.smf.sessions.pop(ue_id, None)
+        return True
+
+    def schedule_purge(self, prefix: str, until: float) -> None:
+        """登记“在 until 之前持续清理某前缀的合成 UE”（总线里可能还有在途消息）。"""
+        self.deferred_purge[prefix] = max(self.deferred_purge.get(prefix, 0.0), float(until))
+
+    def purge_synthetic(self, ctx, prefix: str = "bot-") -> int:
+        """清理攻击注入的合成 UE（AMF/UDM/SMF 三处），避免长会话累积。"""
+        n = self.amf.purge(ctx, prefix)
+        for ue_id in [u for u in self.smf.sessions if u.startswith(prefix)]:
+            self.smf.sessions.pop(ue_id, None)
+            self.smf.degraded.discard(ue_id)
+        return n
 
     # ------------------------------------------------------------------
     def snapshot(self) -> dict:

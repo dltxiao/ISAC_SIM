@@ -27,6 +27,9 @@ class UDM(NetworkFunction):
             self.subscribers[ue_id] = sub
         return sub
 
+    def drop(self, ue_id: str) -> None:
+        self.subscribers.pop(ue_id, None)
+
     def snapshot(self) -> dict:
         out = super().snapshot()
         out["subscribers"] = len(self.subscribers)

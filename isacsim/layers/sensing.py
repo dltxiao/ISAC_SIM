@@ -161,16 +161,27 @@ class SensingLayer:
                     "rcs_dbsm": base["rcs_dbsm"],
                     "snr_db": base["snr_db"],
                     "confidence": round(min(0.99, 0.75 + snr / 200.0), 3),
-                    "pos_x": round(veh.x + float(rng.normal(0.0, 0.15)), 3),
-                    "pos_y": round(veh.y + float(rng.normal(0.0, 0.15)), 3),
+                    # 点迹的笛卡尔位置由本通道的测距+方位重建（与对象列表同源），
+                    # 不再回填 SUMO 真值：否则同一条 track 内部会自带“真值参照”。
+                    "pos_x": round(sensor.x + float(base["range_m"] + float(rng.normal(0.0, 0.05)))
+                                   * _m.cos(_m.radians(sensor.yaw_deg + float(base["azimuth_deg"]))), 3),
+                    "pos_y": round(sensor.y + float(base["range_m"] + float(rng.normal(0.0, 0.05)))
+                                   * _m.sin(_m.radians(sensor.yaw_deg + float(base["azimuth_deg"]))), 3),
                 }
                 ctx.emit("sensing.radar.track", sensor.id, f"veh:{veh.vid}", dict(track), t=t)
 
+            # 目标列表的位置由“距离 + 方位”重建（而不是直接抄车辆真值）。
+            # 这是 A3 跨层链成立的物理前提：回波测距被篡改 → 重建位置偏移 →
+            # ADAS 的纵向距离/TTC 跟着变。若回波被删，则用未篡改的 echo 兜底。
+            src = final_echo if final_echo is not None else echo
+            abs_bearing = _m.radians(sensor.yaw_deg + float(src["azimuth_deg"]))
+            obj_x = sensor.x + float(src["range_m"]) * _m.cos(abs_bearing)
+            obj_y = sensor.y + float(src["range_m"]) * _m.sin(abs_bearing)
             objects.append({
                 "object_id": tid,
                 "cls": veh.cls,
-                "x": round(veh.x + float(rng.normal(0.0, 0.15)), 3),
-                "y": round(veh.y + float(rng.normal(0.0, 0.15)), 3),
+                "x": round(obj_x + float(rng.normal(0.0, 0.05)), 3),
+                "y": round(obj_y + float(rng.normal(0.0, 0.05)), 3),
                 "z": 0.8,
                 "l": round(veh.length, 2),
                 "w": round(veh.width, 2),

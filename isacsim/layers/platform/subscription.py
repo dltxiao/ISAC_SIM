@@ -50,6 +50,60 @@ class SubscriptionManager:
         }, span=span)
         return True
 
+    def shrink(self, ctx, sub_id: str, event_types: list[str], *, span=None) -> list[str]:
+        """从订阅里移除若干事件类型；全部移除时置 REVOKED。
+
+        返回真正被移除的类型。用于“退订范围”随强度变化的剧本（A8）：
+        平台的一次退订可以只丢掉 denm，也可以把 cpm/spat 一起丢掉。
+        """
+        sub = self.subs.get(sub_id)
+        if sub is None:
+            return []
+        removed = [e for e in event_types if e in sub.event_types]
+        if not removed:
+            return []
+        for e in removed:
+            sub.event_types.remove(e)
+        if not sub.event_types:
+            sub.state = "REVOKED"
+            self.revoked += 1
+        ctx.emit("app.subscription", f"tenant:{sub.tenant}", "platform:V2X-01", {
+            "msg_type": "unsubscribe",
+            "tenant": sub.tenant,
+            "subscription_id": sub.sub_id,
+            "event_types": removed,
+            "remaining": list(sub.event_types),
+            "callback": sub.callback,
+            "action": "revoke",
+            "result": "accept",
+            "latency_ms": 2.0,
+        }, span=span)
+        return removed
+
+    def add_events(self, ctx, sub_id: str, event_types: list[str], *, span=None) -> list[str]:
+        """把若干事件类型加回订阅（合法运维恢复）。与 shrink 对称。"""
+        sub = self.subs.get(sub_id)
+        if sub is None:
+            return []
+        added = [e for e in event_types if e not in sub.event_types]
+        if not added:
+            return []
+        sub.event_types.extend(added)
+        if sub.state == "REVOKED" and sub.event_types:
+            sub.state = "ACTIVE"
+        ctx.emit("app.subscription", f"tenant:{sub.tenant}", "platform:V2X-01", {
+            "msg_type": "subscribe",
+            "tenant": sub.tenant,
+            "subscription_id": sub.sub_id,
+            "event_types": added,
+            "remaining": list(sub.event_types),
+            "callback": sub.callback,
+            "action": "update",
+            "result": "accept",
+            "latency_ms": 2.0,
+        }, span=span)
+        return added
+
     def active_for(self, event_type: str) -> list[Subscription]:
         return [s for s in self.subs.values()
                 if s.state == "ACTIVE" and event_type in s.event_types]

@@ -65,12 +65,16 @@ class CoreCfg:
     dnn: str = "v2x"
     snssai: str = "01-000001"
     ip_pool: str = "10.45.0.0/16"
-    amf_capacity_tps: float = 5000.0
-    smf_capacity_sps: float = 2000.0
+    # 按“单路口边缘切片”标定：一辆车一次注册、正常背景 <1 注册/s，
+    # 因此 800/s 已足够宽裕，同时让 A5 的信令风暴能在 3 s 内打满。
+    amf_capacity_tps: float = 800.0
+    smf_capacity_sps: float = 600.0
     upf_capacity_mbps: float = 10000.0
     nef_capacity_qps: float = 1000.0
     auth_capacity_tps: float = 3000.0
-    queue_capacity: int = 1000
+    queue_capacity: int = 300        # 每 NF 的排队深度（消息数）
+    # N6 可路由的数据网络白名单：合法割接（DN-02）不算攻击，EVIL 也不在名单里。
+    allowed_dns: list[str] = field(default_factory=lambda: ["dn:DN-01", "dn:DN-02"])
 
     def __post_init__(self) -> None:
         if self.amf_capacity_tps <= 0 or self.smf_capacity_sps <= 0:

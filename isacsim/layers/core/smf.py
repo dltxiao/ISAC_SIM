@@ -32,14 +32,14 @@ class SMF(NetworkFunction):
             self._release(msg, ctx)
 
     def _establish(self, msg, ctx) -> None:
-        if not self.accept():
+        if not self.accept(ctx):
             self.rejected += 1
             ctx.emit("core.session", self.entity, f"ue:{msg.payload.get('ue_id', '')}", {
                 "msg_type": "pdu_session_establish_reject",
                 "ue_id": msg.payload.get("ue_id"),
                 "cause": "congestion",
                 "result": "reject",
-                "latency_ms": self.base_latency_ms,
+                "latency_ms": self.latency_ms,
             }, span=msg.span)
             return
         ue_id = str(msg.payload.get("ue_id", ""))
@@ -70,7 +70,7 @@ class SMF(NetworkFunction):
             "snssai": session.snssai,
             "ue_ip": session.ue_ip,
             "result": "request",
-            "latency_ms": self.base_latency_ms,
+            "latency_ms": self.latency_ms,
         }, span=tr)
         ctx.emit("core.session", self.entity, f"ue:{ue_id}", {
             "msg_type": "pdu_session_establish_accept",
@@ -78,7 +78,7 @@ class SMF(NetworkFunction):
             "pdu_session_id": session.session_id,
             "ue_ip": session.ue_ip,
             "result": "accept",
-            "latency_ms": self.base_latency_ms,
+            "latency_ms": self.latency_ms,
         }, span=self.factory.child(tr))
         ctx.emit("core.qos", self.entity, session.upf_id, {
             "msg_type": "qos_flow_create",
@@ -142,7 +142,7 @@ class SMF(NetworkFunction):
             "ue_id": ue_id,
             "pdu_session_id": session.session_id,
             "result": "accept",
-            "latency_ms": self.base_latency_ms,
+            "latency_ms": self.latency_ms,
         }, span=tr)
         self.bus.send(
             src=self.entity, dst=session.upf_id, msg_type="flow_delete",

@@ -59,6 +59,8 @@ class Dispatcher:
             self.bursts += 1
         decel = float(params.get("decel_mps2", 3.0))
         duration = float(params.get("duration_s", 1.2))
+        # 合法云控会带上前序危险目标的 TTC；没有危险依据时才落到 99（可疑）。
+        ttc_s = float(params.get("ttc_s", 99.0))
         control = ctx.extras.get("layers", {}).get("control")
         queue = control.intents if control is not None else ctx.extras.setdefault("control_intents", [])
         for vid in vehicle_ids:
@@ -68,6 +70,7 @@ class Dispatcher:
                 "duration_s": duration,
                 "source": "platform:V2X-01",
                 "reason": "cloud_control",
+                "ttc_s": ttc_s,
                 "trace": span,
             })
         return cmd

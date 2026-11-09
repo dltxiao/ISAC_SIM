@@ -52,6 +52,11 @@ class PlatformLayer:
         if not self._bootstrapped:
             self._bootstrap(ctx)
         events = ctx.extras.pop("v2x_outbox", [])
+        # 来源不再写死：N6 路由被改向后，平台收到的真实消息也会带异常 provenance
+        # （A7 的“流量劫持”由此变成对真实数据的可观测后果，而不是一条伪造记录）。
+        core = ctx.extras.get("layers", {}).get("core")
+        upf = getattr(core, "upf", None)
+        provenance = getattr(upf, "route_override", None) or "dn:DN-01"
         for event in events:
             msg_type = Ingest._msg_type(event)
             active = self.subs.active_for(msg_type)
@@ -59,6 +64,7 @@ class PlatformLayer:
                 ctx, event,
                 token_id=self.service_token_id or "svc-rsu",
                 tenant=self.tenant,
+                provenance=provenance,
                 dropped=not bool(active),
                 cause=None if active else "no_subscription",
             )
