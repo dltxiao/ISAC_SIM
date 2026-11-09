@@ -162,6 +162,7 @@ class TraceService:
         self._drop_reported: set[str] = set()
         self._alerts_seen = 0
         self._ghost_seen: set[str] = set()
+        self._live_scan_seq = 0          # 实时阶段扫描游标（只向前）
         self._cpm_rx_seen: dict[str, float] = {}
         self._stage_done: set[str] = set()
         self._evidence: dict[str, dict] = {}
@@ -682,6 +683,7 @@ class TraceService:
             self._t = self.sim.t
             self._tick = ctx.tick
             self._update_attacks()
+            self._collect_live_evidence()
             self._update_sensors()
             self._update_vehicles(ctx)
             self._update_pc5(ctx)
@@ -707,6 +709,7 @@ class TraceService:
         # 按车累计”的遥测。不能在这里清空，否则第二起攻击开始后，第一辆受害车的
         # state 卡片会突然变成 ttc=null / speed_drop=0，看起来像“状态丢了”。
         self._radar_last_tick.clear()
+        self._live_scan_seq = self.seq
         pc5 = self.frames.get("net:pc5")
         if pc5:
             vals = pc5.get("values") or {}
@@ -732,9 +735,10 @@ class TraceService:
                 "extra_load": getattr(inst, "extra_load", None),
             }
             old = self._attacks.get(aid)
+            was_started = bool(old.get("started")) if old else False
             if new:
-                self._attacks[aid] = {"started": bool(snap.get("started")),
-                                      "finished": ended}
+                self._attacks[aid] = dict(info, started=bool(snap.get("started")),
+                                          finished=ended)
                 self._add_attack_targets(inst)
                 if snap.get("started"):
                     self._activate_profile(inst)
@@ -746,13 +750,15 @@ class TraceService:
                         data=info, attack_id=aid, target_id=f"atk:{aid}",
                         severity="attack",
                     )
-            elif old and old["finished"] != ended:
-                self._attacks[aid]["finished"] = ended
+            elif old:
+                self._attacks[aid].update(info)
+                if old["finished"] != ended:
+                    self._attacks[aid]["finished"] = ended
                 if ended:
                     self._event("attack.end", f"{info['type']} {aid} 结束",
                                 data=info, attack_id=aid, target_id=f"atk:{aid}",
                                 severity="attack")
-            if old and not old.get("started") and snap.get("started"):
+            if old is not None and not was_started and snap.get("started"):
                 self._activate_profile(inst)
                 self._reset_attack_state()
                 self._attacks[aid]["started"] = True
@@ -996,6 +1002,26 @@ class TraceService:
 
     # ------------------------------------------------------------------
     # stepping
+    def _collect_live_evidence(self) -> None:
+        """实时模式下的阶段匹配：只扫新增事件，单步模式仍用 _collect_evidence。"""
+        profile = self._profile
+        if profile is None or len(self._evidence) >= len(profile.stages):
+            return
+        for ev in list(self.events):
+            seq = int(ev.get("seq", 0))
+            if seq <= self._live_scan_seq:
+                continue
+            self._live_scan_seq = seq
+            if (seq <= self._evidence_floor
+                    and float(ev.get("t", 0.0)) < self._profile_start_t - 1e-9):
+                continue
+            for stage in profile.stages:
+                if stage.id in self._evidence:
+                    continue
+                if stage.matches(ev):
+                    self._evidence[stage.id] = ev
+                    break
+
     def _collect_evidence(self) -> None:
         """把“已经发生过”的关键事件按当前 profile 的阶段归档。"""
         profile = self._profile
@@ -1117,6 +1143,117 @@ class TraceService:
 
     # ------------------------------------------------------------------
     # read API
+    # ------------------------------------------------------------------
+    # 攻击阶段指示栏
+    def _stage_bar(self) -> dict | None:
+        profile = self._profile
+        aid = self._profile_attack_id
+        info = self._attacks.get(aid) if aid else None
+        if profile is None or not aid:
+            # 已注入但还没开始的剧本（延迟启动）：用 scheduler 里的实例占位
+            for inst in list(self.sim.scheduler.instances):
+                if getattr(inst, "started", False) or getattr(inst, "finished", False):
+                    continue
+                p = profile_for(getattr(inst, "atype", None))
+                if not p.stages:
+                    continue
+                snap = inst.snapshot()
+                spec = getattr(inst, "spec", None)
+                planned = getattr(spec, "start", None)
+                profile, aid = p, getattr(inst, "id", None)
+                # 未启动时 t0 还是 0，不能拿来算相对时间；有显式 start 就用计划值。
+                info = {"id": aid, "type": snap.get("type"),
+                        "label": snap.get("label"),
+                        "t0": planned, "t1": None,
+                        "started": False, "finished": False}
+                break
+        if profile is None or not profile.stages or not aid:
+            return None
+
+        info = info or {}
+        t0 = info.get("t0")
+        t1 = info.get("t1")
+        now = float(self.sim.t)
+        stages = list(profile.stages)
+        matched = [st.id for st in stages if st.id in self._evidence]
+        matched_set = set(matched)
+        frontier = next((i for i, st in enumerate(stages)
+                         if st.id not in matched_set), None)
+        finished = bool(info.get("finished")) or "END" in matched_set
+        if finished:
+            state = "finished"
+        elif info.get("started"):
+            state = "active"
+        else:
+            state = "waiting"
+
+        def rel(t):
+            if t is None or t0 is None:
+                return None
+            return round(float(t) - float(t0), 3)
+
+        items = []
+        for idx, st in enumerate(stages):
+            ev = self._evidence.get(st.id)
+            # 证据可能乱序到达（A2 的 PC5/减速早于注入制动），
+            # 因此“已匹配即 done”，未匹配的：
+            #   已结束 → skipped；profile 顺序上下一个待匹配 → active；其余 pending。
+            if st.id in matched_set:
+                status = "done"
+            elif finished:
+                status = "skipped"
+            elif frontier == idx and st.id != "END" and state == "active":
+                status = "active"
+            else:
+                status = "pending"
+            t_exit = None
+            if ev is not None:
+                for nxt in stages[idx + 1:]:
+                    if nxt.id in matched_set:
+                        nt = rel((self._evidence[nxt.id] or {}).get("t"))
+                        if nt is not None and rel(ev.get("t")) is not None \
+                                and nt > rel(ev.get("t")) + 1e-6:
+                            t_exit = nt
+                        break
+            evidence = None
+            if ev is not None:
+                data = ev.get("data") or {}
+                evidence = {
+                    "kind": ev.get("kind"),
+                    "summary": ev.get("summary"),
+                    "target_id": ev.get("target_id"),
+                    "t": round(float(ev.get("t", now)), 3),
+                    "data": {k: data[k] for k in ("sensor_id", "entity")
+                             if k in data},
+                }
+            items.append({
+                "id": st.id, "title": st.title, "status": status,
+                "t_enter": rel((ev or {}).get("t")),
+                "t_exit": t_exit,
+                "evidence": evidence,
+            })
+
+        others = []
+        for inst in list(self.sim.scheduler.instances):
+            if getattr(inst, "id", None) == aid or getattr(inst, "finished", False):
+                continue
+            if getattr(inst, "started", False):
+                others.append({"id": inst.id, "type": getattr(inst, "atype", None)})
+
+        return {
+            "attack_id": aid,
+            "type": info.get("type"),
+            "label": info.get("label"),
+            "t0": t0, "t1": t1, "now": round(now, 3),
+            "state": state,
+            "current": (stages[frontier].id
+                        if frontier is not None and not finished
+                        and stages[frontier].id != "END"
+                        else (matched[-1] if matched else None)),
+            "stages": items,
+            "others": others,
+        }
+
     @staticmethod
     def _step_public(step: dict | None) -> dict | None:
         if not step:
@@ -1147,6 +1284,7 @@ class TraceService:
                 "steps": [self._step_public(s) for s in list(self.steps)[-10:]],
                 "last_step": self._step_public(self.last_step),
                 "attacks": copy.deepcopy(self._attacks),
+                "stage_bar": self._stage_bar(),
                 "affected": sorted(self._affected),
                 "providers": [p.id for p in self.providers],
             }

@@ -15,6 +15,9 @@
     sensorTab: null,
     coreTab: "nodes",
     platformTab: "summary",
+    stageCollapsed: false,
+    stageExpandEvidence: false,
+    flashTarget: null,
   };
   let pending = null;
   let raf = 0;
@@ -114,6 +117,7 @@
     // 状态/时间这类轻量区域每次都更新；列表只在 cursor/step/state 真正变化时重绘。
     renderHeader();
     renderBanner();
+    renderStageBar();
     const step = snap.last_step || {};
     const key = `${snap.cursor}:${step.step_id || ""}:${snap.state || ""}:${snap.pause_reason || ""}`;
     if (key === state.lastKey) return;
@@ -184,10 +188,151 @@
     renderTabs();
     renderCards();
     renderTree();
+    state.flashTarget = tid;
+    setTimeout(() => {
+      if (state.flashTarget === tid) state.flashTarget = null;
+      applyFlash();
+    }, 1300);
+    applyFlash();
     requestAnimationFrame(() => {
       const card = document.querySelector(cardSelector(t));
       if (card) card.scrollIntoView({ block: "center", behavior: "smooth" });
     });
+  }
+
+  // 卡片每次重渲染都会换 DOM，flash 不能只加一次：按 state.flashTarget 重新贴。
+  function applyFlash() {
+    document.querySelectorAll("#cards .card.flash")
+      .forEach((el) => el.classList.remove("flash"));
+    if (!state.flashTarget) return;
+    const t = ((state.snap && state.snap.targets) || [])
+      .find((x) => x.id === state.flashTarget);
+    if (!t) return;
+    const card = document.querySelector(cardSelector(t));
+    if (card) {
+      void card.offsetWidth;
+      card.classList.add("flash");
+    }
+  }
+
+  // ------------------------------------------------------ stage bar
+  const STAGE_STATE_TEXT = { waiting: "等待启动", active: "进行中", finished: "已结束" };
+
+  function targetExists(tid) {
+    return ((state.snap && state.snap.targets) || []).some((t) => t.id === tid);
+  }
+
+  // 事件里的 target_id 与 watch target 命名不完全一致：
+  // v2x.cpm.degraded 给的是 veh:<vid>，面板是 veh:<vid>.state。
+  function resolveTargetId(tid) {
+    if (!tid) return null;
+    if (targetExists(tid)) return tid;
+    if (tid.startsWith("veh:") && targetExists(`${tid}.state`)) return `${tid}.state`;
+    if (tid.startsWith("sensor:")) {
+      const base = tid.split(".")[0];
+      if (targetExists(`${base}.objects`)) return `${base}.objects`;
+    }
+    return null;
+  }
+
+  function stageTargetOf(st, sb) {
+    const ev = st.evidence || {};
+    const direct = resolveTargetId(ev.target_id);
+    if (direct) return direct;
+    const d = ev.data || {};
+    if (d.sensor_id) {
+      const t = resolveTargetId(`sensor:${d.sensor_id}.objects`);
+      if (t) return t;
+    }
+    if (d.entity && String(d.entity).startsWith("veh:")) {
+      const t = resolveTargetId(`${d.entity}.state`);
+      if (t) return t;
+    }
+    return resolveTargetId(`atk:${sb.attack_id}`);
+  }
+
+  function stageTimeText(st) {
+    const a = st.t_enter;
+    if (a === null || a === undefined) return "—";
+    const f = (v) => `+${Number(v).toFixed(2)}s`;
+    const b = st.t_exit;
+    return (b === null || b === undefined) ? f(a) : `${f(a)}→${f(b)}`;
+  }
+
+  function renderStageBar() {
+    const bar = $("stageBar");
+    const sb = (state.snap || {}).stage_bar;
+    if (!sb) {
+      bar.hidden = true;
+      bar.innerHTML = "";
+      return;
+    }
+    bar.hidden = false;
+    bar.classList.toggle("collapsed", !!state.stageCollapsed);
+
+    const t0 = sb.t0, t1 = sb.t1;
+    const meta = [];
+    if (t0 !== null && t0 !== undefined && t1 !== null && t1 !== undefined) {
+      meta.push(`${Number(t0).toFixed(2)}–${Number(t1).toFixed(2)} s`);
+    }
+    meta.push(STAGE_STATE_TEXT[sb.state] || sb.state);
+    if (sb.state === "active" && t0 !== null && t0 !== undefined) {
+      const elapsed = Math.max(0, Number(sb.now) - Number(t0));
+      const dur = (t1 !== null && t1 !== undefined) ? Number(t1) - Number(t0) : null;
+      meta.push(dur && dur > 0
+        ? `已用 ${elapsed.toFixed(1)}/${dur.toFixed(1)} s`
+        : `已用 ${elapsed.toFixed(1)} s`);
+    }
+
+    const steps = (sb.stages || []).map((st) => {
+      const focus = stageTargetOf(st, sb);
+      const ev = st.evidence || {};
+      const tip = `${st.id} ${st.title}${ev.summary ? " · " + ev.summary : ""}`;
+      return `<li><button type="button" class="stage-step ${esc(st.status)}"
+        data-focus="${esc(focus || "")}" title="${esc(tip)}"
+        ${focus ? "" : "disabled"}>
+        <b>${esc(st.id)}</b><span>${esc(st.title)}</span><em>${esc(stageTimeText(st))}</em>
+      </button></li>`;
+    }).join("");
+
+    const allEv = (sb.stages || []).filter((st) => st.evidence)
+      .sort((a, b) => (b.t_enter ?? -1) - (a.t_enter ?? -1));
+    const shownEv = state.stageExpandEvidence ? allEv : allEv.slice(0, 3);
+    const evs = shownEv.slice().reverse()
+      .map((st) => {
+        const focus = stageTargetOf(st, sb);
+        const ev = st.evidence || {};
+        return `<button type="button" class="stage-ev" data-focus="${esc(focus || "")}"
+          ${focus ? "" : "disabled"} title="${esc(ev.summary || "")}">
+          <span class="ev-id">${esc(st.id)}</span>
+          <span class="ev-t">${esc(stageTimeText(st))}</span>
+          <span class="ev-s">${esc(ev.summary || "")}</span>
+          <span class="ev-go">定位 ›</span>
+        </button>`;
+      }).join("");
+
+    const more = allEv.length > 3
+      ? `<button type="button" class="stage-more" data-stage-more>
+           ${state.stageExpandEvidence ? "收起证据" : `全部 ${allEv.length} 条`}
+         </button>`
+      : "";
+    const others = (sb.others || []);
+    const otherText = others.length
+      ? `<span class="stage-others" title="${esc(others.map((o) => `${o.type} ${o.id}`).join(", "))}">另有 ${others.length} 起攻击</span>`
+      : "";
+
+    bar.innerHTML = `
+      <div class="stage-head">
+        <span class="stage-type">${esc(sb.type || "ATK")}</span>
+        <span class="stage-title">${esc(sb.label || "")}</span>
+        <span class="stage-meta">${esc(meta.join(" · "))}</span>
+        ${otherText}
+        <button type="button" class="stage-toggle" data-stage-toggle>
+          ${state.stageCollapsed ? "展开" : "收起"}
+        </button>
+      </div>
+      <ol class="stage-track">${steps}</ol>
+      <div class="stage-evidence">${evs}${more}</div>`;
   }
 
   function renderTree() {
@@ -517,6 +662,7 @@
     }
     $("cards").innerHTML = cards.join("")
       || `<p class="muted">该分组暂无匹配 target；可用左侧搜索或切换标签。</p>`;
+    applyFlash();
   }
 
   // ----------------------------------------------------------- events
@@ -632,6 +778,22 @@
     if (!item) return;
     e.preventDefault();
     selectEvent(Number(item.dataset.seq));
+  });
+  $("stageBar").addEventListener("click", (e) => {
+    const toggle = e.target.closest && e.target.closest("[data-stage-toggle]");
+    if (toggle) {
+      state.stageCollapsed = !state.stageCollapsed;
+      renderStageBar();
+      return;
+    }
+    const moreBtn = e.target.closest && e.target.closest("[data-stage-more]");
+    if (moreBtn) {
+      state.stageExpandEvidence = !state.stageExpandEvidence;
+      renderStageBar();
+      return;
+    }
+    const el = e.target.closest && e.target.closest("[data-focus]");
+    if (el && el.dataset.focus) focusTarget(el.dataset.focus);
   });
   $("cards").addEventListener("click", (e) => {
     const btn = e.target.closest && e.target.closest("[data-subtab]");

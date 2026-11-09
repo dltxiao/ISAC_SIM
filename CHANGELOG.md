@@ -1,5 +1,22 @@
 # 更新记录
 
+## 未发布（/trace 攻击阶段指示栏，2026-11-09）
+
+### 新增
+
+- **攻击阶段指示栏**：`/trace` 中栏顶部显示当前攻击的 S0–END 阶段状态、相对时间与
+  最近 3 条证据（可展开全部）；点击阶段或证据跳到对应监控面板并高亮卡片。
+  A2 的 `RSU-01 +1 ghost target(s)` → 感知 / RSU-01 已验证。
+- 后端：`TraceService` 新增 `_collect_live_evidence()`（增量扫描、非单步模式也实时推进）
+  与 `snapshot()["stage_bar"]`；`_attacks` 现在保留 type/t0/t1 等完整信息（顺带修复
+  时间轴攻击标记取不到 t0 的问题）。
+- 前端：`#stageBar`、`renderStageBar()`、`resolveTargetId()`（`veh:x`→`veh:x.state`）、
+  `applyFlash()`；多攻击时提示“另有 N 起”。
+
+### 测试
+
+- 新增 `tests/test_stage_bar.py`（5 项：无攻击/等待/A2 幽灵/结束/单体原语）；全量 164 项通过。
+
 ## 未发布（/trace 界面微调，2026-11-09）
 
 ### 界面
