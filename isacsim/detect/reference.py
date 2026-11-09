@@ -38,10 +38,15 @@ class ReferenceDetector:
         self._last_cam: dict[str, dict] = {}
         self._cam_track: dict[str, deque] = defaultdict(lambda: deque(maxlen=20))
         self._obj_streak: dict[tuple[str, int], int] = defaultdict(int)
-        self._bias_streak: dict[tuple[str, int], int] = defaultdict(int)
-        self._resid: dict[tuple[str, int], deque] = defaultdict(lambda: deque(maxlen=6))
+        self._obj_pos: dict[str, deque] = defaultdict(lambda: deque(maxlen=12))
+        self._cross_streak: dict[str, int] = defaultdict(int)
         self._cbr_hist: deque = deque(maxlen=30)
-        self._nas_bot: deque = deque(maxlen=400)
+        self._nas_win: deque = deque(maxlen=20000)   # 1 s 内注册请求
+        self._nas_rej: deque = deque(maxlen=20000)   # 1 s 内注册拒绝
+        self._nas_eval_t: float = -1.0
+        self._app_drops: deque = deque(maxlen=4000)   # 1 s 内 platform 因无订阅丢弃
+        self._cloud_win: deque = deque(maxlen=200)    # 2 s 内的云控提交（频率判定）
+        self._cpm_rx: dict[str, deque] = defaultdict(lambda: deque(maxlen=24))
         self._audit_seq = 0
         self._gnss: dict[str, tuple[float, float, float]] = {}
         self._last_alert: dict[str, float] = {}
@@ -69,10 +74,10 @@ class ReferenceDetector:
         self.t = max(self.t, (rec.ts_ns - T0_NS) / 1e9)
         if stream == "sensing.objects":
             self._on_objects(rec, p)
-        elif stream == "sensing.radar.track":
-            self._on_track(rec, p)
         elif stream == "v2x.cam":
             self._on_cam(rec, p)
+        elif stream == "v2x.cpm.rx":
+            self._on_cpm_rx(rec, p)
         elif stream == "sensing.gnss":
             self._gnss[p.get("node_id", rec.entity)] = (self.t, float(p.get("x", 0.0)),
                                                         float(p.get("y", 0.0)))
@@ -127,35 +132,31 @@ class ReferenceDetector:
                 self._alert("ghost_object", f"{kind}:{sid}",
                             {"x": o["x"], "y": o["y"], "cls": cls}, rec.t_wall_ns)
 
-    def _on_track(self, rec, p) -> None:
-        sid = p.get("sensor_id", rec.source)
-        objs = self._last_objs.get(sid, [])
-        if not objs:
-            return
-        ox, oy = p.get("pos_x"), p.get("pos_y")
-        if ox is None:
-            return
-        sensor = next((s for s in self.scene.sensors if s.id == sid), None)
-        if sensor is None:
-            return
-        true_range = math.hypot(ox - sensor.x, oy - sensor.y)
-        key = (sid, int(p.get("target_id", 0)))
-        resid = float(p.get("range_m", true_range)) - true_range
-        hist = self._resid[key]
-        hist.append(resid)
-        if len(hist) >= 5:
-            vals = sorted(hist)[1:-1]  # 去掉极值，抑制单帧野值
-            mean = sum(vals) / len(vals)
-            if mean > 1.5:
-                self._bias_streak[key] = self._bias_streak.get(key, 0) + 1
-                if self._bias_streak[key] >= 3:
-                    self._alert("radar_range_bias", rec.entity,
-                                {"mean_residual_m": round(mean, 2),
-                                 "range_m": p.get("range_m"),
-                                 "true_range": round(true_range, 2)},
+        # 多传感器互证：同一 entity 在不同站点上的位置应在噪声内一致。
+        # 单站回波被篡改（A3/A10/range_bias）时，站间位置会出现米级以上的分裂；
+        # 这是跨源证据，不依赖生成器回填的真值坐标。
+        for o in objs:
+            ent = str(o.get("entity", ""))
+            if not ent.startswith("veh:"):
+                continue
+            hist = self._obj_pos[ent]
+            hist.append((self.t, sid, float(o.get("x", 0.0)), float(o.get("y", 0.0))))
+            spread, peer = 0.0, None
+            for t2, sid2, x2, y2 in hist:
+                if sid2 == sid or abs(self.t - t2) > 0.1:
+                    continue
+                d = math.hypot(o["x"] - x2, o["y"] - y2)
+                if d > spread:
+                    spread, peer = d, sid2
+            if spread > 6.0:
+                self._cross_streak[ent] += 1
+                if self._cross_streak[ent] >= 3:
+                    self._alert("radar_range_bias", ent,
+                                {"cross_sensor_m": round(spread, 2),
+                                 "sensor": sid, "peer": peer},
                                 rec.t_wall_ns)
             else:
-                self._bias_streak[key] = 0
+                self._cross_streak[ent] = 0
 
     def _on_cam(self, rec, p) -> None:
         pid = p.get("sender_pseudo", rec.entity)
@@ -193,35 +194,92 @@ class ReferenceDetector:
             self._alert("brake_without_hazard", f"veh:{p.get('dst', '')}",
                         {"ttc": ttc, "src": p.get("src")}, rec.t_wall_ns)
 
-    def _on_core_nas(self, rec, p) -> None:
-        if not p.get("bot") or p.get("msg_type") != "registration_request":
+    def _on_cpm_rx(self, rec, p) -> None:
+        """按 UE 的 CPM 接收质量：5QI 降级 → 丢包/时延上升。"""
+        vid = p.get("receiver") or rec.entity.split(":")[-1]
+        hist = self._cpm_rx[vid]
+        hist.append((self.t, bool(p.get("lost")), float(p.get("delay_ms", 0.0)),
+                     int(p.get("5qi", 79))))
+        # 窗口 24 帧、至少 16 帧、丢包 ≥14（≈58%）：合法切片调整（p≈0.15）
+        # 凑到 14/24 接近 7σ；A6 的 p≈0.62 仍能在 1 s 左右稳定命中。
+        if len(hist) < 16:
             return
-        self._nas_bot.append(self.t)
-        cutoff = self.t - 1.0
-        while self._nas_bot and self._nas_bot[0] < cutoff:
-            self._nas_bot.popleft()
-        if len(self._nas_bot) >= 10:
-            self._alert("nas_registration_flood", "amf:AMF-01",
-                        {"bot_reg_per_s": len(self._nas_bot)}, rec.t_wall_ns)
+        lost = sum(1 for _, l, _, _ in hist if l)
+        ratio = lost / len(hist)
+        five_qi = hist[-1][3]
+        if five_qi <= 9 and lost >= 14:
+            self._alert("cpm_degraded", f"veh:{vid}",
+                        {"5qi": five_qi, "lost_ratio": round(ratio, 2),
+                         "delay_ms": round(hist[-1][2], 1)}, rec.t_wall_ns)
+
+    def _on_core_nas(self, rec, p) -> None:
+        """注册洪泛：按到达速率 + 拒绝占比判定，不依赖生成器自报的 bot 标记。"""
+        mt = p.get("msg_type")
+        t = self.t
+        cutoff = t - 1.0
+        if mt == "registration_request":
+            self._nas_win.append((t, str(p.get("ue_id") or "")))
+            while self._nas_win and self._nas_win[0][0] < cutoff:
+                self._nas_win.popleft()
+        elif mt == "registration_reject":
+            self._nas_rej.append((t, str(p.get("cause") or "")))
+            while self._nas_rej and self._nas_rej[0][0] < cutoff:
+                self._nas_rej.popleft()
+        else:
+            return
+        if t - self._nas_eval_t < 0.5:
+            return
+        self._nas_eval_t = t
+        n = len(self._nas_win)
+        rej = len(self._nas_rej)
+        if n < 300 or rej < 0.1 * n:
+            return
+        ids = {ue for _, ue in self._nas_win if ue}
+        self._alert("nas_registration_flood", "amf:AMF-01", {
+            "reg_per_s": n,
+            "rejects_per_s": rej,
+            "reject_ratio": round(rej / max(1, n), 3),
+            "distinct_ue": len(ids),
+            "id_diversity": round(len(ids) / max(1, n), 3),
+        }, rec.t_wall_ns)
 
     def _on_core_upf(self, rec, p) -> None:
-        if p.get("msg_type") == "route_change" and p.get("route") != "dn:DN-01":
+        allowed = set(getattr(self.scene.core, "allowed_dns", ["dn:DN-01"]))
+        if p.get("msg_type") == "route_change" and p.get("route") not in allowed:
             self._alert("upf_route_drift", p.get("upf_id", rec.entity),
                         {"route": p.get("route")}, rec.t_wall_ns)
 
     def _on_core_qos(self, rec, p) -> None:
-        if p.get("msg_type") == "qos_flow_modify" and int(p.get("5qi", 79)) <= 9:
+        # 合法割接（5QI 79→8、GFBR 1000→800）不应报警：要求同时砍到 500 kbps 以下。
+        if (p.get("msg_type") == "qos_flow_modify"
+                and int(p.get("5qi", 79)) <= 9
+                and int(p.get("gfbr_kbps") or 0) < 500):
             self._alert("qos_downgrade", "smf:SMF-01",
                         {"5qi": p.get("5qi"), "gfbr_kbps": p.get("gfbr_kbps")},
                         rec.t_wall_ns)
 
     def _on_app_ingest(self, rec, p) -> None:
-        if p.get("provenance") not in (None, "dn:DN-01"):
+        allowed = set(getattr(self.scene.core, "allowed_dns", ["dn:DN-01"]))
+        prov = p.get("provenance")
+        if prov not in (None, *allowed):
             self._alert("ingest_provenance_mismatch", "platform:V2X-01",
-                        {"provenance": p.get("provenance")}, rec.t_wall_ns)
+                        {"provenance": p.get("provenance"),
+                         "source": p.get("source"),
+                         "msg_type": p.get("msg_type")}, rec.t_wall_ns)
         if float(p.get("latency_ms", 0.0)) >= 50.0:
             self._alert("ingest_latency_spike", "platform:V2X-01",
                         {"latency_ms": p.get("latency_ms")}, rec.t_wall_ns)
+        # 平台因“没有订阅”而持续丢事件：A8 的后果本身，不再依赖退订事件
+        if p.get("cause") == "no_subscription":
+            self._app_drops.append(self.t)
+            cutoff = self.t - 1.0
+            while self._app_drops and self._app_drops[0] < cutoff:
+                self._app_drops.popleft()
+            if len(self._app_drops) >= 10:
+                self._alert("ingest_drop_spike", "platform:V2X-01", {
+                    "drops_per_s": len(self._app_drops),
+                    "msg_type": p.get("msg_type"),
+                }, rec.t_wall_ns)
 
     def _on_app_audit(self, rec, p) -> None:
         seq = int(p.get("audit_seq", 0))
@@ -231,9 +289,12 @@ class ReferenceDetector:
         self._audit_seq = max(self._audit_seq, seq)
 
     def _on_app_subscription(self, rec, p) -> None:
-        if p.get("action") == "revoke" and p.get("result") == "accept":
+        removed = p.get("event_types") or []
+        if (p.get("action") == "revoke" and p.get("result") == "accept"
+                and len(removed) >= 2):
             self._alert("subscription_tamper", "platform:V2X-01",
-                        {"subscription_id": p.get("subscription_id")}, rec.t_wall_ns)
+                        {"subscription_id": p.get("subscription_id"),
+                         "removed": list(removed)}, rec.t_wall_ns)
 
     def _on_core_nef(self, rec, p) -> None:
         if p.get("msg_type") == "api_unsubscribe" and p.get("result") == "accept":
@@ -241,11 +302,28 @@ class ReferenceDetector:
                         {"subscription_id": p.get("subscription_id")}, rec.t_wall_ns)
 
     def _on_app_control(self, rec, p) -> None:
-        params = p.get("params") or {}
+        """多车云控：按“批量 + 频率”判定，不依赖 replayed 等自报标记。
+
+        单次多车下发不足以说明问题（车队控制、绿波调度都合法）；这里要求
+        2 s 内同一平台连续 ≥2 批、每批 ≥3 车。合法批量控制的误报仍需靠
+        正常集里的难负样本评估（审核 R5）。
+        """
+        if p.get("result") != "accept":
+            return
         n = len(p.get("vehicle_ids") or [])
-        if p.get("result") == "accept" and (n >= 3 or params.get("replayed")):
-            self._alert("cloud_control_burst", "platform:V2X-01",
-                        {"vehicles": n, "command": p.get("command")}, rec.t_wall_ns)
+        if n < 3:
+            return
+        self._cloud_win.append((self.t, n, p.get("token_id")))
+        cutoff = self.t - 2.0
+        while self._cloud_win and self._cloud_win[0][0] < cutoff:
+            self._cloud_win.popleft()
+        if len(self._cloud_win) >= 3:
+            self._alert("cloud_control_burst", "platform:V2X-01", {
+                "batches_2s": len(self._cloud_win),
+                "vehicles": n,
+                "token": p.get("token_id"),
+                "command": p.get("command"),
+            }, rec.t_wall_ns)
 
     # ------------------------------------------------------------------
     def snapshot(self) -> dict[str, Any]:

@@ -97,7 +97,8 @@ def cmd_batch(args) -> int:
     types = [t.strip() for t in args.types.split(",") if t.strip()]
     jobs = build_jobs(args.out, attacks=args.attacks, normal=args.normal,
                       types=types, duration=args.duration, amplitude=args.amplitude,
-                      split=args.split, streams=not args.no_streams, seed0=args.seed)
+                      split=args.split, streams=not args.no_streams,
+                      seed0=args.seed, ops=not args.no_ops)
     est = estimate_batch(len(jobs), default_scene(), args.workers)
     print(f"[isacsim] 计划 {len(jobs)} 个场景，{args.workers} 进程；预估 {est}")
     t0 = time.perf_counter()
@@ -253,13 +254,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", default="out/ds")
     p.add_argument("--attacks", type=int, default=16)
     p.add_argument("--normal", type=int, default=16)
-    p.add_argument("--types", default="A1,A2,A3,A4")
+    p.add_argument("--types", default="A1,A2,A3,A4,A5,A6,A7,A8,A9,A10")
     p.add_argument("--duration", type=float, default=20.0)
     p.add_argument("--amplitude", type=float, default=0.6)
     p.add_argument("--split", default="train")
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--no-streams", action="store_true")
+    p.add_argument("--no-ops", action="store_true",
+                   help="正常集不注入合法运维动作（默认注入）")
     p.set_defaults(func=cmd_batch)
 
     p = sub.add_parser("eval", help="事件级评估")

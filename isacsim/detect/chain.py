@@ -59,6 +59,9 @@ class Chain:
                        "t": round(e.t, 3)} for e in self.edges],
             "stages": self.stages,
             "root_cause": self.root_cause,
+            # 这是“告警级骨架”，不是因果链模型：每个告警一个 stage，
+            # 首个告警实体当根因。评估里必须按这个口径解读。
+            "model": "alert_skeleton",
             "confidence": round(self.confidence, 3),
         }
 

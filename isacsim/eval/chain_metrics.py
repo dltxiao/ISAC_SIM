@@ -52,17 +52,26 @@ def compare(truth: dict[str, Any], chain: dict[str, Any]) -> dict[str, Any]:
         "stage_ratio": stage_ratio,
         "truth_nodes": sorted(tn),
         "pred_nodes": sorted(pn),
+        # 口径标记：这两个指标是“告警级骨架”，不是阶段级/因果级识别。
+        "stage_ratio_kind": "alert_count_skeleton",
+        "root_cause_kind": "first_alert_entity",
     }
 
 
 def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not rows:
         return {"chains": 0, "node_recall": 0.0, "node_precision": 0.0,
-                "root_cause_top1": 0.0, "stage_ratio": 0.0}
+                "root_cause_top1": 0.0, "stage_ratio": 0.0,
+                "stage_ratio_kind": "alert_count_skeleton",
+                "root_cause_kind": "first_alert_entity"}
     return {
         "chains": len(rows),
         "node_recall": round(mean(r["node_recall"] for r in rows), 4),
         "node_precision": round(mean(r["node_precision"] for r in rows), 4),
         "root_cause_top1": round(mean(r["root_hit"] for r in rows), 4),
         "stage_ratio": round(mean(r["stage_ratio"] for r in rows), 4),
+        # 预测链是“每条告警一个 stage、首个告警实体当根因”的骨架，
+        # 这两个数值不能读成“阶段级/根因级识别能力”（审核 R7）。
+        "stage_ratio_kind": "alert_count_skeleton",
+        "root_cause_kind": "first_alert_entity",
     }

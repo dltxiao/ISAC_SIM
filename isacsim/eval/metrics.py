@@ -83,8 +83,10 @@ def evaluate_runs(run_dirs: list[Path]) -> dict[str, Any]:
 
     每个运行目录需包含：truth/events.jsonl、alerts.jsonl、meta.json。
     """
-    attack_events = 0
+    attack_events = 0          # 包络内事件（识别率分母）
     hits = 0
+    out_of_envelope = 0        # 包络外事件：单列，不进分母
+    out_of_envelope_hits = 0
     normal_runs = 0
     normal_with_alerts = 0
     by_type: dict[str, dict[str, int]] = {}
@@ -121,11 +123,18 @@ def evaluate_runs(run_dirs: list[Path]) -> dict[str, Any]:
                             "alerts": len(alerts), "events": len(detected)})
             continue
 
-        attack_events += len(truth)
-        n_hit, hit_idx, unmatched = match_events(truth, detected)
+        in_env, out_env = [], []
+        for ev in truth:
+            (in_env if (ev.get("envelope") or {}).get("in_envelope", True) else out_env).append(ev)
+        attack_events += len(in_env)
+        out_of_envelope += len(out_env)
+        n_hit, hit_idx, unmatched = match_events(in_env, detected)
         hits += n_hit
+        if out_env:
+            n_out_hit, _, _ = match_events(out_env, detected)
+            out_of_envelope_hits += n_out_hit
         run_chain_rows: list[dict[str, Any]] = []
-        for i, ev in enumerate(truth):
+        for i, ev in enumerate(in_env):
             t = ev["campaign"]
             slot = by_type.setdefault(t, {"n": 0, "hit": 0})
             slot["n"] += 1
@@ -151,6 +160,7 @@ def evaluate_runs(run_dirs: list[Path]) -> dict[str, Any]:
                             max(1, len(run_chain_rows)), 4)})
 
     recall = hits / attack_events if attack_events else 0.0
+    out_recall = out_of_envelope_hits / out_of_envelope if out_of_envelope else 0.0
     fpr = normal_with_alerts / normal_runs if normal_runs else 0.0
     r_lo, r_hi = wilson(hits, attack_events) if attack_events else (0.0, 1.0)
     f_lo, f_hi = wilson(normal_with_alerts, normal_runs) if normal_runs else (0.0, 1.0)
@@ -166,6 +176,12 @@ def evaluate_runs(run_dirs: list[Path]) -> dict[str, Any]:
         "attack_events": attack_events,
         "hits": hits,
         "recall": {"point": round(recall, 4), "lower95": round(r_lo, 4), "upper95": round(r_hi, 4)},
+        "out_of_envelope": {
+            "events": out_of_envelope,
+            "hits": out_of_envelope_hits,
+            "recall": round(out_recall, 4),
+            "note": "包络外样本单列，不计入 recall 分母",
+        },
         "normal_runs": normal_runs,
         "false_positive_runs": normal_with_alerts,
         "fpr": {"point": round(fpr, 4), "lower95": round(f_lo, 4), "upper95": round(f_hi, 4)},
@@ -192,8 +208,13 @@ def render_report(result: dict[str, Any]) -> str:
     if chain.get("chains"):
         lines.append(
             f"- 链级：节点召回 {chain['node_recall']:.2%} / 精确率 {chain['node_precision']:.2%} / "
-            f"根因 top-1 {chain['root_cause_top1']:.2%} / 阶段覆盖 {chain['stage_ratio']:.2%} "
+            f"根因 top-1（首告警实体）{chain['root_cause_top1']:.2%} / "
+            f"阶段覆盖（告警数骨架）{chain['stage_ratio']:.2%} "
             f"（{chain['chains']} 条）"
+        )
+        lines.append(
+            "- 说明：链级指标来自 `ChainBuilder` 的**告警级骨架**（每条告警一个 stage、"
+            "首个告警实体当根因），不代表阶段级/因果级识别能力。"
         )
     lines.extend([
         "",

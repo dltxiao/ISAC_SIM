@@ -21,6 +21,7 @@ class Job:
     amplitude: float
     split: str
     streams: bool
+    ops: bool = True          # 正常集里的合法运维动作（R5 难负样本）
     step_s: float = 0.05
 
 
@@ -45,9 +46,21 @@ def _run_one(job: Job) -> dict[str, Any]:
         length = max(4.0, job.duration * 0.45)
         sim.scheduler.submit(AttackSpec(type=job.atype, amplitude=job.amplitude,
                                         duration=length, start=start))
+    ops_payload: dict[str, Any] = {}
     try:
-        sim.run()
+        if job.kind == "normal" and job.ops:
+            # 正常集：在仿真循环里插入合法运维动作（不产生攻击真值）
+            from .benign import BenignOps
+
+            ops = BenignOps(job.seed, scene, job.duration)
+            sim.start()
+            while sim.step_once():
+                ops.tick(sim.last_ctx)
+            ops_payload = ops.snapshot()
+        else:
+            sim.run()
     finally:
+        sim.stop()
         detector.dump(out / "alerts.jsonl")
         detector.dump_chains(out / "chains.json")
         (out / "meta.json").write_text(json.dumps({
@@ -56,6 +69,7 @@ def _run_one(job: Job) -> dict[str, Any]:
             "split": job.split, "records": sim.stats.records_total,
             "bytes": sim.stats.bytes_total, "truth_events": len(sim.truth.events),
             "alerts": len(detector.alerts),
+            "benign_ops": ops_payload.get("ops", []),
             "realtime_factor": None,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"run": run_id, "records": sim.stats.records_total,
@@ -64,7 +78,7 @@ def _run_one(job: Job) -> dict[str, Any]:
 
 def build_jobs(out: str, *, attacks: int, normal: int, types: list[str],
                duration: float, amplitude: float, split: str,
-               streams: bool, seed0: int = 1) -> list[Job]:
+               streams: bool, seed0: int = 1, ops: bool = True) -> list[Job]:
     jobs: list[Job] = []
     n_types = max(1, len(types))
     for i in range(attacks):
@@ -72,9 +86,10 @@ def build_jobs(out: str, *, attacks: int, normal: int, types: list[str],
                         atype=types[i % n_types], duration=duration,
                         amplitude=amplitude, split=split, streams=streams))
     for i in range(normal):
-        jobs.append(Job(out=out, seed=seed0 + 100_000 + i, kind="normal",
+        # 与攻击同一段 seed（配对），不再用 100_000 起的另一段
+        jobs.append(Job(out=out, seed=seed0 + i, kind="normal",
                         atype=None, duration=duration, amplitude=amplitude,
-                        split=split, streams=streams))
+                        split=split, streams=streams, ops=ops))
     return jobs
 
 
