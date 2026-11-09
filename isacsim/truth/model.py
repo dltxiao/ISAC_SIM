@@ -28,7 +28,8 @@ OFFICIAL_TYPES = {
 OFFICIAL_CHAIN = {
     "A1": ["sensing.objects:inject", "adas:ttc_brake", "denm:flood", "pc5:cbr_up"],
     "A2": ["sensing.objects:spoof_sign", "control.command:inject", "link:jam", "veh:hard_brake"],
-    "A3": ["radar.echo:range_ramp", "radar.track:bias", "control.command:inject", "telemetry:mask"],
+    "A3": ["radar.echo:range_ramp", "sensing.objects:position_shift", "adas:ttc_brake",
+           "control.command:inject", "telemetry:mask"],
     # A4 当前只作用于认证与 V2X；uu:ghost_attach 尚未实现，不能写进真值。
     "A4": ["auth.cert:clone", "auth.fingerprint:replay", "v2x.cam:spoof"],
     "A5": ["core.nas:registration_flood", "core.session:establish_fail",
@@ -60,6 +61,7 @@ class TruthEvent:
     causal_chain: list[str] = field(default_factory=list)
     expected_evidence: list[str] = field(default_factory=list)
     chain: dict[str, Any] | None = None
+    observed: dict[str, Any] = field(default_factory=dict)
     label: int = 1
     seed: int = 0
     generator_version: str = GENERATOR_VERSION
@@ -85,6 +87,9 @@ class TruthEvent:
         }
         if self.chain is not None:
             out["chain"] = self.chain
+        if self.observed:
+            # planned vs observed：t1/stages 是计划，observed 是实际发生的
+            out["observed"] = self.observed
         return out
 
 
@@ -105,8 +110,17 @@ class TruthStore:
 
     def close(self) -> None:
         if self._fh is not None:
-            self._fh.close()
-            self._fh = None
+            try:
+                # add() 时已落过一份“计划版”；收尾时按内存中的事件重写，
+                # 把 stop() 回填的 observed（实际结束时刻/实际证据）补上。
+                self._fh.seek(0)
+                self._fh.truncate()
+                for ev in self.events:
+                    self._fh.write(json.dumps(ev.to_dict(), ensure_ascii=False) + "\n")
+                self._fh.flush()
+            finally:
+                self._fh.close()
+                self._fh = None
 
     def write_manifest(self, extra: dict[str, Any] | None = None) -> None:
         if self.dir is None:

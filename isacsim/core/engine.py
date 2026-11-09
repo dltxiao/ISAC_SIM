@@ -26,12 +26,14 @@ class Simulation:
         self.run_id = run_id or f"{scene.name}-{scene.seed}-{int(time.time())}"
         self.out_dir = Path(out_dir) if out_dir else None
         self.stats = stats or RunStats()
+        from .stats import CountingSink
         if sink is not None:
-            self.sink = sink
+            # 外部传入的 sink 也要计数：真值 observed.evidence_seen 依赖
+            # stats.stream_records，少了这层会永远判“证据缺失”。
+            self.sink = sink if isinstance(sink, CountingSink) else CountingSink(sink, self.stats)
         elif self.out_dir:
             self.sink = make_sink(self.out_dir, self.run_id, scene.streams, self.stats)
         else:
-            from .stats import CountingSink
             self.sink = CountingSink(NullSink(), self.stats)
         self.detector = detector
         if detector is not None and getattr(detector, "stats", None) is None:
@@ -290,6 +292,16 @@ class Simulation:
             return
         self.state = "stopped"
         self.stats.state = "stopped"
+        # 跑到仿真结束还没到 t1 的攻击也要收尾：摘 hook、恢复全局状态、回填 observed
+        try:
+            if self.last_ctx is not None:
+                for inst in list(self.scheduler.instances):
+                    if inst.started and not inst.finished:
+                        inst.stop(self.last_ctx)
+                        self.stats.campaign_finished()
+                        self.stats.note("attack", f"{inst.atype} 随运行结束收尾（{inst.id}）")
+        except Exception:            # 收尾失败不能阻断落盘
+            pass
         try:
             if self.sumo is not None:
                 self.sumo.close()

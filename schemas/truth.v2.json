@@ -35,6 +35,16 @@
         "confidence": {"type": "number"}
       }
     },
+    "observed": {
+      "type": "object",
+      "properties": {
+        "t_end": {"type": "number"},
+        "cancelled": {"type": "boolean"},
+        "evidence_seen": {"type": "array", "items": {"type": "string"}},
+        "evidence_missing": {"type": "array", "items": {"type": "string"}},
+        "stages_role": {"type": "string"}
+      }
+    },
     "seed": {"type": "integer"},
     "generator_version": {"type": "string"}
   }

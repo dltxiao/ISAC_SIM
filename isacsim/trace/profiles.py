@@ -83,10 +83,12 @@ def _a2_brake(event: dict) -> bool:
 
 
 def _a3_brake(event: dict) -> bool:
+    # A3 的伪指令幅度随偏移进度递增（0.6 进度时约 1.9 m/s²），
+    # 上界放宽到 2.5，避免与 A2 的 3.0+ 混淆，也避免 stage 永远匹配不上。
     data = _data(event)
     if data.get("reason") != "injected":
         return False
-    return _float_value(data.get("decel"), 0.0) <= 1.5
+    return 0.8 <= _float_value(data.get("decel"), 0.0) <= 2.5
 
 
 def _a4_cert(event: dict) -> bool:
@@ -150,8 +152,10 @@ def _a9_cloud_control(event: dict) -> bool:
 
 
 def _a10_signaling(event: dict) -> bool:
+    # 不再依赖 bot 标记：真实注册请求（S1 之后出现）即可作为“轻度信令”阶段
     data = _data(event)
-    return bool(data.get("bot")) or data.get("result") == "reject"
+    return (data.get("msg_type") in ("registration_request", "registration_reject")
+            or data.get("result") == "reject")
 
 
 def _a10_audit(event: dict) -> bool:
@@ -287,9 +291,9 @@ A6_PROFILE = TraceProfile(
                   pause_at="after_scheduler"),
         StageSpec("S1", "5QI 79→9", ("core.qos",),
                   pause_at="after_layer:core", predicate=_a6_qos),
-        StageSpec("S2", "CPM 降级/伪造", ("v2x.cpm.forged",),
+        StageSpec("S2", "CPM 接收降级", ("v2x.cpm.degraded", "v2x.cpm.forged"),
                   pause_at="after_layer:platform",
-                  wait_for=("S1",), wait_ref="S1", wait_s=0.5),
+                  wait_for=("S1",), wait_ref="S1", wait_s=1.2),
         StageSpec("S3", "平台 Ingest 延迟", ("app.ingest",),
                   pause_at="after_layer:platform", predicate=_a6_slow_ingest,
                   wait_for=("S2",), wait_ref="S1", wait_s=0.5),
@@ -310,7 +314,7 @@ A7_PROFILE = TraceProfile(
                   pause_at="after_scheduler"),
         StageSpec("S1", "UPF 路由改向", ("core.upf",),
                   pause_at="after_layer:core", predicate=_a7_route),
-        StageSpec("S2", "伪造 CPM 入平台", ("v2x.cpm.forged", "app.ingest"),
+        StageSpec("S2", "流量改向/伪造 CPM 入平台", ("v2x.cpm.forged", "app.ingest"),
                   pause_at="after_layer:platform", predicate=_a7_forged_ingest,
                   wait_for=("S1",), wait_ref="S1", wait_s=0.5),
         StageSpec("S3", "云控制动", ("control.command",),
@@ -328,12 +332,12 @@ A8_PROFILE = TraceProfile(
     stages=(
         StageSpec("S0", "订阅篡改开始", ("attack.start",),
                   pause_at="after_scheduler"),
-        StageSpec("S1", "NEF 退订 DENM/SPaT", ("core.nef",),
+        StageSpec("S1", "NEF API 滥用（无下游）", ("core.nef",),
                   pause_at="after_layer:core", predicate=_a8_nef_unsubscribe),
-        StageSpec("S2", "平台订阅撤销", ("app.subscription",),
+        StageSpec("S2", "平台订阅被缩减", ("app.subscription",),
                   pause_at="after_layer:platform", predicate=_a8_subscription_revoke,
                   wait_for=("S1",), wait_ref="S1", wait_s=0.5),
-        StageSpec("S3", "平台漏事件", ("app.ingest",),
+        StageSpec("S3", "平台成片漏事件", ("app.ingest",),
                   pause_at="after_layer:platform", predicate=_a8_dropped,
                   wait_for=("S2",), wait_ref="S1", wait_s=0.5),
         StageSpec("S4", "云控制动", ("control.command",),

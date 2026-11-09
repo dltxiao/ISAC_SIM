@@ -121,6 +121,9 @@ def _diff_struct(prev: dict | None, cur: dict) -> dict[str, Any]:
     return {"added": added, "removed": removed, "changed": changed}
 
 
+AFFECTED_WINDOW_S = 5.0   # “受影响”的时间窗：最后一次制动指令之后的可见期
+
+
 class TraceService:
     """单会话、单写者（仿真线程）、多读者（Web）。"""
 
@@ -159,6 +162,7 @@ class TraceService:
         self._drop_reported: set[str] = set()
         self._alerts_seen = 0
         self._ghost_seen: set[str] = set()
+        self._cpm_rx_seen: dict[str, float] = {}
         self._stage_done: set[str] = set()
         self._evidence: dict[str, dict] = {}
         self._evidence_floor = 0
@@ -331,7 +335,11 @@ class TraceService:
                 self._commanded.add(vid)
                 # A1 的幽灵会让多辆车依次 ADAS 制动；这些“波及车”也要有 state 卡片，
                 # 否则事件指向一个不存在的 target，或在卡片里永远“等待数据…”。
-                self._ensure_state_target(vid)
+                # 但只在“有攻击在跑”或“该车可归因到攻击”时建卡：否则攻击结束后
+                # 正常交通的 ADAS 制动也会不断新建卡片，看起来像受影响车辆一直增加。
+                attacking = any(not i.finished for i in self.sim.scheduler.instances)
+                if attacking or self._attack_for_vehicle(vid) is not None:
+                    self._ensure_state_target(vid)
                 self._last_cmd[vid] = {
                     "seq": p.get("seq"), "reason": p.get("reason"),
                     "decel": (p.get("params") or {}).get("decel_mps2"),
@@ -344,7 +352,22 @@ class TraceService:
                     data=self._last_cmd[vid], target_id=f"veh:{vid}.state",
                     attack_id=self._attack_for_vehicle(vid), t=t,
                 )
+            elif rec.stream == "telemetry.mask":
+                # A3 的“掩盖”动作：把受影响的回波记成弱信号
+                self._event(
+                    "telemetry.mask",
+                    f"masked {p.get('masked_echoes')} echo(es) → {p.get('target')}",
+                    data={"marked": p.get("masked_echoes"), "snr_drop_db": p.get("snr_drop_db"),
+                          "target": p.get("target"), "sensor": p.get("sensor"),
+                          "reason": p.get("reason")},
+                    attack_id=self._attack_for_entity(f"veh:{p.get('target')}"),
+                    severity="attack", t=t,
+                )
             elif rec.stream == "v2x.denm" and p.get("forged"):
+                # A1 会以数百条/秒灌 DENM；事件环只留 1 条/秒摘要，避免把别的证据挤掉
+                if t - getattr(self, "_forged_denm_t", -1e9) < 1.0:
+                    return
+                self._forged_denm_t = t
                 self._event(
                     "record.forged_denm",
                     f"forged DENM @ {p.get('posx')}, {p.get('posy')}",
@@ -375,6 +398,8 @@ class TraceService:
                     attack_id=self._attack_for_vehicle(vid),
                     severity="effect", t=t,
                 )
+            elif rec.stream == "v2x.cpm.rx":
+                self._on_cpm_rx_event(rec, p, t)
             elif rec.stream == "v2x.cpm":
                 # 只更新“每 sender 最新摘要”（v2x:cpm 表），不逐条入事件环。
                 self._on_cpm(rec)
@@ -440,7 +465,7 @@ class TraceService:
         }
         # profile 判定所需的语义字段；保持白名单，避免把整条 payload 塞进 ring。
         for field in ("provenance", "token_id", "tenant", "vehicle_ids",
-                      "command", "action", "subscription_id", "event_types",
+                      "command", "action", "subscription_id", "event_types", "remaining",
                       "actor", "5qi", "old_5qi", "route", "bot", "ue_id"):
             if field in p:
                 data[field] = p[field]
@@ -490,6 +515,28 @@ class TraceService:
                 "source_stream": rec.stream,
             },
             attack_id=attack_id, severity="effect", t=self.sim.t,
+        )
+
+    def _on_cpm_rx_event(self, rec, p: dict, t: float) -> None:
+        """按 UE 的 CPM 接收降级：每个 receiver 每秒最多一条事件。"""
+        if not (p.get("degraded") or p.get("lost")):
+            return
+        vid = str(p.get("receiver") or rec.entity.split(":")[-1])
+        last = self._cpm_rx_seen.get(vid, -1e9)
+        if t - last < 0.5:
+            return
+        self._cpm_rx_seen[vid] = t
+        self._event(
+            "v2x.cpm.degraded",
+            f"CPM 接收降级 @ {vid} (5QI {p.get('5qi')}, lost={bool(p.get('lost'))})",
+            data={"receiver": vid, "5qi": p.get("5qi"),
+                  "lost": bool(p.get("lost")),
+                  "loss_p": p.get("loss_p"),
+                  "delay_ms": p.get("delay_ms"),
+                  "sender": p.get("sender")},
+            target_id=f"veh:{vid}",
+            attack_id=self._attack_for_vehicle(vid),
+            severity="effect", t=t,
         )
 
     # ------------------------------------------------------------------
@@ -567,11 +614,18 @@ class TraceService:
                 return inst.id
         return None
 
+    @staticmethod
+    def _is_attack_vehicle(inst, vid: str) -> bool:
+        """受害车，或被篡改回波的前车（A3 的 lead 也是攻击节点）。"""
+        return (inst.veh_id == vid if getattr(inst, "veh_id", None) else False) \
+            or vid == getattr(inst, "lead_id", None) \
+            or vid in (getattr(inst, "victims", None) or [])
+
     def _attack_for_vehicle(self, vid: str) -> str | None:
         for inst in self.sim.scheduler.instances:
             if getattr(inst, "finished", False):
                 continue
-            if self._victim_of(inst) == vid or vid in (getattr(inst, "victims", None) or []):
+            if self._is_attack_vehicle(inst, vid):
                 return inst.id
         return None
 
@@ -581,10 +635,8 @@ class TraceService:
                 continue
             if entity.startswith("rsu:") and getattr(inst, "rsu_id", None) == entity[4:]:
                 return inst.id
-            if entity.startswith("veh:"):
-                vid = entity[4:]
-                if self._victim_of(inst) == vid or vid in (getattr(inst, "victims", None) or []):
-                    return inst.id
+            if entity.startswith("veh:") and self._is_attack_vehicle(inst, entity[4:]):
+                return inst.id
         return None
 
     # ------------------------------------------------------------------
@@ -772,7 +824,13 @@ class TraceService:
             if drop > self._speed_drop.get(v.vid, 0.0):
                 self._speed_drop[v.vid] = drop
             flags = list(self.sim.flags.get(v.vid, []))
-            affected = v.vid in self._commanded or bool(flags)
+            last_cmd_t = (self._last_cmd.get(v.vid) or {}).get("t")
+            recent = last_cmd_t is not None and (self._t - float(last_cmd_t)) <= AFFECTED_WINDOW_S
+            # “受影响”= 当前仍处于影响窗口（有攻击 flag，或最近 5 s 内被下过制动指令）。
+            # 再叠加“本轮有攻击在跑”：否则攻击结束后，正常交通的 ADAS 制动也会被误标成受影响，
+            # 表现为计数只增不减。累计口径单独保存在 _affected 里，供状态卡片与攻击归因使用。
+            attacking = any(not i.finished for i in self.sim.scheduler.instances)
+            affected = bool(flags) or (attacking and recent)
             if affected:
                 self._affected.add(v.vid)
             rows.append({
@@ -823,7 +881,10 @@ class TraceService:
                 "x": round(float(v.x), 2), "y": round(float(v.y), 2),
                 "heading": round(float(v.heading_deg), 1),
                 "flags": self.sim.flags.get(victim, []),
-                "affected": victim in self._affected,
+                "affected": bool(self.sim.flags.get(victim)) or (
+                    (cmd or {}).get("t") is not None
+                    and self._t - float(cmd["t"]) <= AFFECTED_WINDOW_S),
+                "affected_ever": victim in self._affected,
                 "ttc": (cmd or {}).get("ttc"),
                 "last_command": cmd,
                 "speed_drop": round(self._speed_drop.get(victim, 0.0), 3),
@@ -836,7 +897,8 @@ class TraceService:
 
     def _update_pc5(self, ctx) -> None:
         v = self.sim.v2x
-        extra = float(ctx.extras.get("v2x_extra_load", 0.0) or 0.0)
+        v2x = (ctx.extras.get("layers") or {}).get("v2x")
+        extra = float(getattr(v2x, "extra_load", 0.0) or 0.0)
         values = {
             "cbr": round(float(v.cbr), 3), "offered": round(float(v.offered), 1),
             "per": round(float(v.per), 4), "delay_ms": round(float(v.delay_ms), 2),
