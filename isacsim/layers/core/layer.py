@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+from collections import deque
+
 from ...config import SceneCfg
 from ...core.ids import SpanFactory
 from ..defense import emit_defense
@@ -37,13 +39,21 @@ class CoreLayer:
         self._known: dict[str, str] = {}
         self.deferred_purge: dict[str, float] = {}   # 前缀 → 清理截止时刻
         self._closed = False
+        # 健康度看“最近 2 s 的错误率”，不是自开局以来的累计值：
+        # 否则 A5 这类一次性风暴会让 AMF 永远红着（审核反馈）。
+        self._t = 0.0
+        self._err_prev: dict[str, tuple[int, int]] = {}
+        self._err_win: dict[str, deque] = {
+            name: deque(maxlen=200) for name in ("amf", "smf", "udm", "ausf")}
 
     # ------------------------------------------------------------------
     def tick(self, ctx) -> None:
         if not self.cfg.enabled or self._closed:
             return
+        self._t = float(ctx.t)
         for nf in self.nfs.values():
             nf.tick(ctx)                    # 排空服务能力、更新过载指示
+        self._sample_errors(self._t)
         self.bus.dispatch(ctx.t, self.nfs, ctx)
         uu = ctx.extras.get("layers", {}).get("uu")
         attached = dict(getattr(uu, "attached", {}) or {})
@@ -69,6 +79,31 @@ class CoreLayer:
         ctx.extras["core"] = self
 
     # ------------------------------------------------------------------
+    def _sample_errors(self, now: float) -> None:
+        for name in self._err_win:
+            nf = getattr(self, name, None)
+            if nf is None:
+                continue
+            recv = int(getattr(nf, "received", 0))
+            rej = int(getattr(nf, "rejected", 0))
+            prev = self._err_prev.get(name)
+            self._err_prev[name] = (recv, rej)
+            if prev is None:
+                continue
+            win = self._err_win[name]
+            win.append((now, max(0, recv - prev[0]), max(0, rej - prev[1])))
+            while win and win[0][0] < now - 2.0:
+                win.popleft()
+
+    def _error_rate(self, name: str) -> float:
+        """最近 2 s 的拒绝占比（无流量时为 0）。"""
+        win = self._err_win.get(name)
+        if not win:
+            return 0.0
+        recv = sum(r for _, r, _ in win)
+        rej = sum(j for _, _, j in win)
+        return rej / recv if recv > 0 else 0.0
+
     def reattach(self, ctx, ue_id: str) -> bool:
         """让 UE 重新走一遍注册流程（攻击者伪造注销后的重入）。
 
@@ -108,7 +143,7 @@ class CoreLayer:
             float(amf.get("load_hint", 0.0)),
             float(amf.get("queue_depth", 0)) / max(1, self.amf.queue_capacity),
         )
-        amf_err = amf["rejected"] / max(1, amf["received"])
+        amf_err = self._error_rate("amf")
         amf_health = compute_health(
             enabled=enabled, load=amf_load, error_rate=amf_err,
             anomaly=bool(self.amf.overloaded),
@@ -117,7 +152,7 @@ class CoreLayer:
         )
 
         smf_load = smf.get("degraded_sessions", 0) / max(1, smf.get("sessions", 0))
-        smf_err = smf["rejected"] / max(1, smf["received"])
+        smf_err = self._error_rate("smf")
         smf_health = compute_health(
             enabled=enabled, load=smf_load, error_rate=smf_err,
             warning=smf.get("degraded_sessions", 0) > 0,
@@ -125,34 +160,39 @@ class CoreLayer:
                      if smf.get("degraded_sessions") else []),
         )
 
+        allowed_dns = set(getattr(self.cfg, "allowed_dns", ["dn:DN-01"]))
+        route_ov = upf.get("route_override")
+        bad_route = bool(route_ov) and route_ov not in allowed_dns
         upf_load = smf.get("degraded_sessions", 0) / max(1, upf.get("flows", 0))
         upf_health = compute_health(
             enabled=enabled, load=upf_load,
-            anomaly=bool(upf.get("route_override")),
+            anomaly=bad_route,
             warning=smf.get("degraded_sessions", 0) > 0,
-            reasons=(["route override"] if upf.get("route_override") else []),
+            reasons=([f"route override {route_ov}"] if bad_route else []),
             metrics={"route": upf.get("route")},
         )
 
+        # NEF：看“最近 2 s 是否有人退订/吊销”，累计计数只用于统计
+        nef_recent = [
+            (label, at) for label, at in (
+                ("unsubscribe", self.nef.last_unsub_t),
+                ("token revoke", self.nef.last_revoke_t),
+            ) if at is not None and self._t - at <= 2.0
+        ]
         nef_health = compute_health(
             enabled=enabled,
-            anomaly=bool(nef.get("unsubscribed") or nef.get("revoked")),
-            reasons=(
-                [f"unsubscribed {nef['unsubscribed']}"] if nef.get("unsubscribed") else []
-            ) + (
-                [f"revoked {nef['revoked']}"] if nef.get("revoked") else []
-            ),
+            anomaly=bool(nef_recent),
+            reasons=[f"recent {label}" for label, _ in nef_recent],
         )
-        udm_err = udm["rejected"] / max(1, udm["received"])
+        udm_err = self._error_rate("udm")
         udm_health = compute_health(enabled=enabled, error_rate=udm_err,
                                     load=udm.get("subscribers", 0) / 1000.0)
-        ausf_err = ausf["rejected"] / max(1, ausf["received"])
+        ausf_err = self._error_rate("ausf")
         ausf_health = compute_health(enabled=enabled, error_rate=ausf_err)
 
         dn_health = compute_health(
-            enabled=enabled,
-            anomaly=bool(upf.get("route_override")),
-            reasons=["route hijack"] if upf.get("route_override") else [],
+            enabled=enabled, anomaly=bad_route,
+            reasons=["route hijack"] if bad_route else [],
         )
         gnb_health = compute_health(
             enabled=enabled,

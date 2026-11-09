@@ -1,5 +1,26 @@
 # 更新记录
 
+## 未发布（健康度改为瞬时状态，2026-11-09）
+
+### 修复
+
+- **核心网健康度不再用累计计数**：`CoreLayer` 按 2 s 窗口重算 AMF/SMF/UDM/AUSF 的拒绝占比；
+  A5 风暴结束后 AMF/SMF 会回到绿色，而不是永久红色。
+- **UPF 路由恢复**：`restore_route()` 清空 `route_override` 并恢复 flow 路由；旧实现把
+  `route_override` 置成 `"dn:DN-01"`，健康度仍按“被覆盖”判红，A7 之后 UPF 永久异常。
+- **UPF 路由健康度改用白名单**：`route_override` 在 `core.allowed_dns` 内（如合法割接 DN-02）
+  不算异常；只有 EVIL 之类不在名单里的才判红。
+- **NEF 健康度改为“最近 2 s 事件”**：退订/吊销 token 只在发生后 2 s 内计入，不再用累计
+  `unsubscribed/revoked`，A8 之后 NEF 会恢复绿色。
+- **平台健康度改为“最近 2 s 事件”**：ingest 丢弃/来源异常/慢处理、IAM 拒绝、云控拒绝/突发、
+  审计抑制、订阅吊销都按窗口统计；A7/A8/A9/A10 之后平台节点会恢复绿色。
+- **平台 ingest 的 provenance 判定改用 `allowed_dns` 白名单**：合法 DN-02 割接不再计入
+  `provenance_bad`。
+
+### 测试
+
+- 新增 `tests/test_core_health.py`：A5/A7/A8/A9/A10 与合法割接的“攻击中变红、攻击后恢复”回归。
+
 ## 未发布（评估口径与正常集，P0+P1，2026-11-09）
 
 ### 新增（R5 难负样本）

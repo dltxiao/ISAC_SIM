@@ -42,6 +42,7 @@ class Ingest:
     def ingest(self, ctx, event: dict[str, Any], *, token_id: str,
                tenant: str, provenance: str = "dn:DN-01",
                dropped: bool = False, cause: str | None = None,
+               allowed_dns: set[str] | None = None,
                span=None) -> dict[str, Any] | None:
         msg_type = self._msg_type(event)
         source = self._source(event)
@@ -56,7 +57,8 @@ class Ingest:
         if latency >= 50.0:
             self.slow += 1
         self.max_latency_ms = max(self.max_latency_ms, latency)
-        if provenance not in (None, "dn:DN-01"):
+        allowed = allowed_dns or {"dn:DN-01"}
+        if provenance not in (None, *allowed):
             self.provenance_bad += 1
         payload = {
             "msg_type": msg_type,

@@ -21,6 +21,9 @@ class NEF(NetworkFunction):
         self._sub_seq = 0
         self.unsubscribed = 0
         self.revoked = 0
+        # 最近一次变更的时刻：健康度看“最近是否有人动过”，不看累计次数
+        self.last_unsub_t: float | None = None
+        self.last_revoke_t: float | None = None
 
     # ------------------------------------------------------------------
     def issue_token(self, ctx, *, subject: str, tenant: str,
@@ -112,6 +115,7 @@ class NEF(NetworkFunction):
             return False
         sub.state = "REVOKED"
         self.unsubscribed += 1
+        self.last_unsub_t = ctx.t
         ctx.emit("core.nef", self.entity, self.entity, {
             "msg_type": "api_unsubscribe",
             "subscription_id": sub_id,
@@ -129,6 +133,7 @@ class NEF(NetworkFunction):
             return False
         token.revoked = True
         self.revoked += 1
+        self.last_revoke_t = ctx.t
         ctx.emit("core.nef", self.entity, self.entity, {
             "msg_type": "token_revoke",
             "token_id": token_id,

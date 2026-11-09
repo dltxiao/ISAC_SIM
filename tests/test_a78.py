@@ -97,7 +97,9 @@ def test_a7_cancel_restores_route():
     assert sim.core.upf.route_override == "dn:EVIL-01"
     assert sim.cancel_attack(inst.id)
     sim.step_once()
-    assert sim.core.upf.route_override == "dn:DN-01"
+    # 取消后必须真正清掉 override（旧实现只改成 "dn:DN-01"，健康度仍判红）
+    assert sim.core.upf.route_override is None
+    assert sim.core.upf.snapshot()["route"] == "dn:DN-01"
     assert inst.t_end is not None
     sim.stop()
 

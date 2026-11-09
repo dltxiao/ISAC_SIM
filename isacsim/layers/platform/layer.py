@@ -1,6 +1,8 @@
 """PlatformLayer：API 网关/IAM/订阅/Ingest/云控/审计的语义平台。"""
 from __future__ import annotations
 
+from collections import deque
+
 from ...config import SceneCfg
 from ..defense import emit_defense
 from ..health import compute_health
@@ -25,6 +27,13 @@ class PlatformLayer:
         self.tenant = self.cfg.tenants[0]
         self._bootstrapped = False
         self._last_t = 0.0
+        self._t = 0.0
+        # 平台健康度同样看“最近 2 s 是否发生异常”，累计计数只做统计
+        self._anom_names = ("ingest_drop", "provenance", "slow", "iam_reject",
+                            "disp_reject", "burst", "audit_suppress", "subs_revoke")
+        self._anom_prev: dict[str, int] = {}
+        self._anom_win: dict[str, deque] = {
+            k: deque(maxlen=64) for k in self._anom_names}
         self._closed = False
 
     # ------------------------------------------------------------------
@@ -67,7 +76,10 @@ class PlatformLayer:
                 provenance=provenance,
                 dropped=not bool(active),
                 cause=None if active else "no_subscription",
+                allowed_dns=set(getattr(self.scene.core, "allowed_dns", ["dn:DN-01"])),
             )
+        self._t = float(ctx.t)
+        self._sample_anomalies(self._t)
         self._last_t = ctx.t
         ctx.extras["platform"] = self
 
@@ -102,6 +114,30 @@ class PlatformLayer:
         return emit_defense(ctx, layer="app", action="platform_quarantine_source",
                             target=source, params={"source": source}, span=span)
 
+    def _sample_anomalies(self, now: float) -> None:
+        values = {
+            "ingest_drop": self.ingest.dropped,
+            "provenance": self.ingest.provenance_bad,
+            "slow": self.ingest.slow,
+            "iam_reject": self.iam.rejected,
+            "disp_reject": self.dispatcher.rejected,
+            "burst": self.dispatcher.bursts,
+            "audit_suppress": self.audit.suppressed,
+            "subs_revoke": self.subs.revoked,
+        }
+        for name, val in values.items():
+            prev = self._anom_prev.get(name)
+            self._anom_prev[name] = val
+            win = self._anom_win[name]
+            if prev is not None and val > prev:
+                for _ in range(min(20, val - prev)):
+                    win.append(now)
+            while win and win[0] < now - 2.0:
+                win.popleft()
+
+    def _recent_anomalies(self) -> dict[str, int]:
+        return {k: len(q) for k, q in self._anom_win.items() if q}
+
     def snapshot(self) -> dict:
         elapsed = max(self._last_t, 1.0)
         ingest = self.ingest.snapshot()
@@ -110,13 +146,9 @@ class PlatformLayer:
         disp = self.dispatcher.snapshot()
         audit = self.audit.snapshot()
         qps = self.ingest.count / elapsed
-        anomaly = bool(
-            ingest["dropped"] > 0 or ingest["provenance_bad"] > 0
-            or iam["rejected"] > 0 or disp["rejected"] > 0
-            or disp["bursts"] > 0 or audit["suppressed"] > 0
-            or subs["revoked"] > 0
-        )
-        warning = bool(ingest["slow"] > 0)
+        recent = self._recent_anomalies()
+        anomaly = bool(recent)
+        warning = "slow" in recent
         return {
             "enabled": self.cfg.enabled,
             "tenant": self.tenant,
@@ -130,11 +162,7 @@ class PlatformLayer:
                 enabled=self.cfg.enabled,
                 load=qps / max(1.0, self.cfg.api_qps),
                 anomaly=anomaly, warning=warning,
-                reasons=(
-                    [f"ingest dropped {ingest['dropped']}"] if ingest["dropped"] else []
-                ) + (
-                    [f"control bursts {disp['bursts']}"] if disp["bursts"] else []
-                ),
+                reasons=[f"recent {k} {v}" for k, v in recent.items()],
                 metrics={"qps": round(qps, 2),
                          "api_qps": self.cfg.api_qps,
                          "dropped": ingest["dropped"],

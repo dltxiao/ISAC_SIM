@@ -30,7 +30,17 @@ class UPF(NetworkFunction):
         }, span=span)
 
     def restore_route(self, ctx, *, span=None) -> None:
-        self.set_route(ctx, "dn:DN-01", span=span)
+        """恢复默认路由：必须清掉 override，否则 health 会永远认为被劫持。"""
+        self.route_override = None
+        for flow in self.flows.values():
+            flow.route = "dn:DN-01"
+        ctx.emit("core.upf", self.entity, self.entity, {
+            "msg_type": "route_change",
+            "route": "dn:DN-01",
+            "flows": len(self.flows),
+            "result": "restored",
+            "latency_ms": self.base_latency_ms,
+        }, span=span)
 
     def handle(self, msg, ctx) -> None:
         if msg.msg_type == "flow_install":
